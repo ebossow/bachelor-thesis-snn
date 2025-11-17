@@ -2,8 +2,18 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from src.analysis.metrics import (instantaneous_rates, population_rate, cv_isi)
-from src.analysis.plotting import plot_spike_raster
+from src.analysis.metrics import (
+    instantaneous_rates,
+    population_rate,
+    cv_isi,
+    kuramoto_order_parameter,
+)
+from src.analysis.plotting import (
+    plot_spike_raster,
+    plot_pdf_cv,
+    plot_pdf_R,
+    plot_pdf_mean_rate,
+)
 
 def load_run(run_dir: Path):
     with (run_dir / "config_resolved.yaml").open("r") as f:
@@ -50,35 +60,60 @@ def find_latest_run_dir(results_root: Path) -> Path:
     latest = max(run_dirs, key=lambda p: p.stat().st_mtime)
     return latest
 
+def combine_spikes(data, keys):
+    times_list = []
+    senders_list = []
+
+    for key in keys:
+        sd = data.get(key)
+        if sd is None:
+            continue
+        times_list.append(sd["times"])
+        senders_list.append(sd["senders"])
+
+    if not times_list:
+        return {"times": np.array([]), "senders": np.array([])}
+
+    times = np.concatenate(times_list)
+    senders = np.concatenate(senders_list)
+    return {"times": times, "senders": senders}
+
 def main():
     results_root = Path("results")
     run_dir = find_latest_run_dir(results_root)
     print(f"Using latest run directory: {run_dir}")
     cfg, data = load_run(run_dir)
 
-    spikes_E = data["spikes_E"]
-    N_E = cfg["network"]["N_E"]
+    spikes_N = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
+    N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
 
-    rates_E, t_bins, mean_E = instantaneous_rates(
-        spikes_E["times"],
-        spikes_E["senders"],
-        N_population=N_E,
+    rates_N, t_bins, mean_rates_N = instantaneous_rates(
+        spikes_N["times"],
+        spikes_N["senders"],
+        N_population=N,
         t_start=0.0,
         t_stop=cfg["experiment"]["simtime_ms"],
         bin_size_ms=50.0,
     )
-    nu_E = population_rate(rates_E)
-    cv_E = cv_isi(spikes_E["times"], spikes_E["senders"], N_population=N_E)
-    #R, Phi = kuramoto_order_parameter(
-    #    spikes_E["times"],
-    #    spikes_E["senders"],
-    #    N_population=N_E,
-    #    t_eval=t_bins,
-    #)
-    print(nu_E)
-    print(cv_E)
+    pop_rate_N = population_rate(rates_N)
+    cv_N = cv_isi(spikes_N["times"], spikes_N["senders"], N_population=N)
+    # Kuramoto (z.B. E-Population)
+    R, Phi = kuramoto_order_parameter(
+        spikes_N["times"],
+        spikes_N["senders"],
+        N,
+        t_eval=t_bins,
+    )
+
+    #print(pop_rate_N)
+    #print(cv_N)
+    #print(R)
     # hier dann plotting-Funktionen aufrufen
+    # plots
     plot_spike_raster(data, cfg)
+    plot_pdf_cv(cv_N)
+    plot_pdf_R(R)
+    plot_pdf_mean_rate(mean_rates_N)
 
 if __name__ == "__main__":
     main()

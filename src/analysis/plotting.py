@@ -43,3 +43,45 @@ def plot_spike_raster(data: Dict[str, Any],
     #filename = f"./plots/spike_raster_{timestamp}.jpg"
     #plt.savefig(filename, dpi=150)
     plt.show()
+
+
+def _plot_pdf(values, xlabel: str, title: str, bins: int = 50):
+    """
+    Helper: plot a normalized histogram (PDF) of `values`.
+    """
+    vals = np.asarray(values, float)
+    vals = vals[np.isfinite(vals)]  # drop NaN/inf
+
+    if vals.size == 0:
+        print(f"No finite values to plot for {title}")
+        return
+
+    plt.figure()
+    plt.hist(vals, bins=bins, density=True)
+    plt.xlabel(xlabel)
+    plt.ylabel("PDF")
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_pdf_cv(cv: np.ndarray, bins: int = 50):
+    """
+    PDF of CV_i across neurons.
+    """
+    _plot_pdf(cv, xlabel="CV_i", title="Distribution of CV_i", bins=bins)
+
+
+def plot_pdf_R(R: np.ndarray, bins: int = 50):
+    """
+    PDF of Kuramoto order parameter R(t) across time.
+    """
+    _plot_pdf(R, xlabel="R", title="Distribution of R(t)", bins=bins)
+
+
+def plot_pdf_mean_rate(mean_rates: np.ndarray, bins: int = 50):
+    """
+    PDF of mean firing rates (Hz) across neurons.
+    """
+    _plot_pdf(mean_rates, xlabel="Mean firing rate (Hz)",
+              title="Distribution of mean firing rates", bins=bins)

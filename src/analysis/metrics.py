@@ -161,3 +161,82 @@ def cv_isi(
             cv[j] = sigma / mu
 
     return cv
+
+
+def kuramoto_order_parameter(
+    times: npt.NDArray[np.floating],
+    senders: npt.NDArray[np.int_],
+    N_population: int,
+    t_eval: npt.NDArray[np.floating],
+) -> Tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """
+    Kuramoto-Order-Parameter Z(t) = R(t) e^{i Φ(t)}.
+
+    times, senders: Spikes einer Population (z.B. alle E-Neuronen)
+    N_population:   Anzahl Neuronen
+    t_eval:         Zeitpunkte, an denen Z(t) ausgewertet wird (ms)
+
+    Returns
+    -------
+    R:  |Z(t)|, shape (len(t_eval),)
+    Phi: arg(Z(t)), shape (len(t_eval),)
+    """
+    times = np.asarray(times, float)
+    senders = np.asarray(senders, int)
+    t_eval = np.asarray(t_eval, float)
+
+    R = np.zeros_like(t_eval, dtype=float)
+    Phi = np.zeros_like(t_eval, dtype=float)
+
+    if times.size == 0 or N_population == 0:
+        return R, Phi
+
+    sender_index = _build_sender_index(senders, N_population)
+
+    # Spikezeiten pro Neuron sammeln
+    spikes_per_neuron: Dict[int, npt.NDArray[np.floating]] = {j: np.array([], float) for j in range(N_population)}
+    order = np.argsort(times)
+    times_sorted = times[order]
+    senders_sorted = senders[order]
+
+    for t, gid in zip(times_sorted, senders_sorted):
+        j = sender_index.get(int(gid), None)
+        if j is None:
+            continue
+        spikes_per_neuron[j] = np.append(spikes_per_neuron[j], float(t))
+
+    N = N_population
+
+    for k, t in enumerate(t_eval):
+        # Summe über j: e^{i θ_j(t)}
+        z_sum = 0.0 + 0.0j
+        count_valid = 0
+
+        for j in range(N):
+            ts = spikes_per_neuron[j]
+            if ts.size < 2:
+                continue
+            # Position des ersten Spikes > t
+            idx = np.searchsorted(ts, t, side="right")
+            n = idx - 1
+            if n < 0 or n >= ts.size - 1:
+                continue  # t vor erstem oder nach letztem Intervall
+
+            t_n = ts[n]
+            t_np1 = ts[n + 1]
+            if t_np1 <= t_n:
+                continue
+
+            theta = 2.0 * np.pi * (t - t_n) / (t_np1 - t_n)
+            z_sum += np.exp(1j * theta)
+            count_valid += 1
+
+        if count_valid > 0:
+            Z_t = z_sum / count_valid
+        else:
+            Z_t = 0.0 + 0.0j
+
+        R[k] = np.abs(Z_t)
+        Phi[k] = np.angle(Z_t)
+
+    return R, Phi
