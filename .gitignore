@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Ergebnisse / große Dateien
+results/
+*.npz
+
+# Sonstiges
+.DS_Store
