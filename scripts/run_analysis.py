@@ -116,9 +116,47 @@ def main():
     print(f"Using latest run directory: {run_dir}")
     cfg, data, weights_data, weights_over_time = load_run(run_dir)
 
+    simtime_ms = cfg["experiment"]["simtime_ms"]
+
+    stim_dc = cfg["stimulation"]["dc"]
+    t_analysis_start = stim_dc["t_off_ms"]  # z.B. 40000.0 ms
+    t_analysis_stop = simtime_ms           # z.B. 60000.0 ms
+
+    # all spikes
     spikes_N = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
     N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
+    # nur Spikes nach Stimulus-Off für Metriken
+    times_all = spikes_N["times"]
+    senders_all = spikes_N["senders"]
 
+    mask_post = (times_all >= t_analysis_start) & (times_all < t_analysis_stop)
+    times_post = times_all[mask_post]
+    senders_post = senders_all[mask_post]
+
+
+    # Firing Rates
+    rates_N, t_bins, mean_rate_population, mean_rates_per_neuron = instantaneous_rates(
+        times_post, 
+        senders_post,
+        N_population=N,
+        t_start=t_analysis_start,
+        t_stop=t_analysis_stop,
+        bin_size_ms=50.0,
+    )
+    pop_rate_N = population_rate(rates_N)
+
+    #CV ISI
+    cv_N = cv_isi(times_post, senders_post, N_population=N)
+
+    # Kuramoto (z.B. E-Population)
+    R, Phi = kuramoto_order_parameter(
+        times_post, 
+        senders_post,
+        N,
+        t_eval=t_bins,
+    )
+
+    # Weight Trajectory Analyse
     W = build_weight_matrix(
         weights_data["sources"],
         weights_data["targets"],
@@ -128,30 +166,15 @@ def main():
     Wn = normalize_weight_matrix(W, cfg)
 
     if weights_over_time is not None:
-        wt = weights_over_time["times"]
-        Wt = weights_over_time["weights"]  # (n_snap, M)
-        N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
-
-        t_mid, K = mean_weight_change(wt, Wt, N_total=N)
-
-    rates_N, t_bins, mean_rate_population, mean_rates_per_neuron = instantaneous_rates(
-        spikes_N["times"],
-        spikes_N["senders"],
-        N_population=N,
-        t_start=0.0,
-        t_stop=cfg["experiment"]["simtime_ms"],
-        bin_size_ms=50.0,
-    )
-    pop_rate_N = population_rate(rates_N)
-    cv_N = cv_isi(spikes_N["times"], spikes_N["senders"], N_population=N)
-    # Kuramoto (z.B. E-Population)
-    R, Phi = kuramoto_order_parameter(
-        spikes_N["times"],
-        spikes_N["senders"],
-        N,
-        t_eval=t_bins,
-    )
-
+        t_mid, K = mean_weight_change(
+            weight_times=weights_over_time["times"],
+            weights=weights_over_time["weights"],
+            N_total=N,
+        )   
+    
+    # nur Intervalle nach Stimulus-Off
+    mask_K = (t_mid >= t_analysis_start) & (t_mid < t_analysis_stop)
+    K_post = K[mask_K]
 
     fig = plt.figure(figsize=(12, 10))
     gs = fig.add_gridspec(
@@ -176,7 +199,7 @@ def main():
     plot_pdf_cv_ax(ax_cv, cv_N)
     plot_pdf_R_ax(ax_R, R)
     plot_pdf_mean_rate_ax(ax_rate, mean_rates_per_neuron)
-    plot_K_ax(ax_K, t_mid, K)
+    plot_K_ax(ax_K, K_post)
 
     im = plot_weight_matrix_ax(ax_W, Wn, cfg)
     cbar = fig.colorbar(im, ax=ax_W)

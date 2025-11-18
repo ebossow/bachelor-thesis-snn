@@ -216,28 +216,29 @@ def plot_weight_matrix(
 # ---------------------------------------------------------------------------
 
 def plot_K_ax(ax: plt.Axes,
-              t_mid_ms: np.ndarray,
-              K: np.ndarray) -> None:
+              K: np.ndarray,
+              bins: int = 50) -> None:
     """
-    Plot von K(t) (mittlere Gewichtsänderungsrate) auf gegebener Axes.
+    PDF der mittleren Gewichtsänderungsrate K(t).
 
-    t_mid_ms : Zeitpunkte in ms (z.B. aus mean_weight_change_alltoall)
-    K        : Änderungsrate, z.B. Gewichtseinheiten pro Sekunde.
+    K : array der K(t)-Werte (z.B. aus mean_weight_change_alltoall)
     """
-    t_mid_ms = np.asarray(t_mid_ms, float)
-    K = np.asarray(K, float)
+    vals = np.asarray(K, float)
+    vals = vals[np.isfinite(vals)]
 
-    ax.plot(t_mid_ms, K)
-    ax.set_xlabel("time (ms)")
-    ax.set_ylabel("K(t)")
-    ax.set_title("Mean weight change rate K(t)")
+    if vals.size == 0:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    ax.hist(vals, bins=bins, density=True)
+    ax.set_xlabel("Mean change rate of weights (Hz)")
+    ax.set_ylabel("PDF")
+    ax.set_title("Distribution of mean weight change rate K(t)")
 
 
-def plot_K(t_mid_ms: np.ndarray, K: np.ndarray) -> None:
-    """
-    Wrapper: eigener Plot für K(t).
-    """
+def plot_K(K: np.ndarray, bins: int = 50) -> None:
     fig, ax = plt.subplots()
-    plot_K_ax(ax, t_mid_ms, K)
+    plot_K_ax(ax, K, bins=bins)
     plt.tight_layout()
     plt.show()
