@@ -2,7 +2,7 @@
 
 experiment:
   name: "base_experiment"
-  simtime_ms: 10000
+  simtime_ms: 60000
   seed: 12345
   nest:
     resolution_ms: 0.1
@@ -82,7 +82,7 @@ synapses:
 
 stimulation:
   dc:
-    enabled: false
+    enabled: true
     rnd_mean_pA: 405.0
     rnd_std_pA: 20.0
     t_on_ms: 5000.0

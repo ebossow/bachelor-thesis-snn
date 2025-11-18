@@ -73,16 +73,10 @@ def main() -> None:
         simtime_ms=cfg["experiment"]["simtime_ms"],
         recording_devices=rec_devices,
     )
-    #print(data)
-    plot_spike_raster(data, cfg)
-    # hier: data + cfg in results/ speichern
 
     run_root = Path("results")
     run_dir = make_run_dir(run_root, cfg["experiment"]["name"])
     save_run(cfg, data, run_dir, pops)
-
-    
-
 
 if __name__ == "__main__":
     main()
