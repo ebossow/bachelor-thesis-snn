@@ -208,3 +208,36 @@ def plot_weight_matrix(
     cbar.set_label("Normalized weight")
     plt.tight_layout()
     plt.show()
+
+
+
+# ---------------------------------------------------------------------------
+# K(t): mean weight change rate
+# ---------------------------------------------------------------------------
+
+def plot_K_ax(ax: plt.Axes,
+              t_mid_ms: np.ndarray,
+              K: np.ndarray) -> None:
+    """
+    Plot von K(t) (mittlere Gewichtsänderungsrate) auf gegebener Axes.
+
+    t_mid_ms : Zeitpunkte in ms (z.B. aus mean_weight_change_alltoall)
+    K        : Änderungsrate, z.B. Gewichtseinheiten pro Sekunde.
+    """
+    t_mid_ms = np.asarray(t_mid_ms, float)
+    K = np.asarray(K, float)
+
+    ax.plot(t_mid_ms, K)
+    ax.set_xlabel("time (ms)")
+    ax.set_ylabel("K(t)")
+    ax.set_title("Mean weight change rate K(t)")
+
+
+def plot_K(t_mid_ms: np.ndarray, K: np.ndarray) -> None:
+    """
+    Wrapper: eigener Plot für K(t).
+    """
+    fig, ax = plt.subplots()
+    plot_K_ax(ax, t_mid_ms, K)
+    plt.tight_layout()
+    plt.show()

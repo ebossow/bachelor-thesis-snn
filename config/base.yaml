@@ -79,6 +79,7 @@ synapses:
     enabled: true
     decay_factor: 0.999
     chunk_ms: 100.0
+    every_n_chunks: 10
 
 stimulation:
   dc:

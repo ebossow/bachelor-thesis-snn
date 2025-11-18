@@ -18,6 +18,7 @@ def init_kernel(experiment_cfg: Dict[str, Any]) -> None:
     seed = experiment_cfg.get("seed", None)
 
     nest.ResetKernel()
+    nest.set_verbosity("M_WARNING")
     nest.SetKernelStatus({
         "resolution": resolution,
         "local_num_threads": threads,

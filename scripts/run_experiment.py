@@ -74,6 +74,7 @@ def main() -> None:
         recording_devices=rec_devices,
         populations=pops,
         synapse_cfg=cfg["synapses"],
+        record_weight_trajectory = True
     )
 
     run_root = Path("results")

@@ -319,3 +319,68 @@ def normalize_weight_matrix(
     # clip to [-1,1] for safety
     np.clip(Wn, -1.0, 1.0, out=Wn)
     return Wn
+
+
+def mean_weight_change(
+    weight_times: npt.NDArray[np.floating],
+    weights: npt.NDArray[np.floating],
+    N_total: int,
+) -> Tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """
+    K(t) nach Gleichung (16) für ein all-to-all Netzwerk ohne Autapses.
+
+    K(t_k) = 1 / [N (N-1)] * sum_{i != j} (w_ij(t_{k+1}) - w_ij(t_k)) / Δt_k
+
+    Parameters
+    ----------
+    weight_times : (n_snap,) in ms
+        Zeitpunkte der Gewichtssnapshots.
+    weights : (n_snap, M)
+        Gewichte pro Snapshot, flach über alle Synapsen (z.B. [E, IH, IA] concat).
+        Für all-to-all ohne Autapses gilt M = N*(N-1).
+    N_total : int
+        Anzahl Neuronen N.
+
+    Returns
+    -------
+    t_mid : (n_snap-1,) in ms
+        Mittlere Zeitpunkte der Intervalle.
+    K : (n_snap-1,)
+        Mittlere Änderungsrate der Gewichte (Gewichtseinheiten pro Sekunde).
+    """
+    weight_times = np.asarray(weight_times, float)
+    weights = np.asarray(weights, float)
+
+    if weight_times.ndim != 1:
+        raise ValueError("weight_times must be 1D")
+    if weights.ndim != 2:
+        raise ValueError("weights must be 2D (n_snap, M)")
+    if weight_times.shape[0] != weights.shape[0]:
+        raise ValueError("Mismatch between number of time points and snapshots")
+
+    n_snap, M = weights.shape
+    if n_snap < 2:
+        raise ValueError("Need at least two snapshots to compute K(t)")
+
+    expected_M = N_total * (N_total - 1)
+    if M != expected_M:
+        # wenn du sicher weißt, dass immer all-to-all, kannst du hier auch hart fehlschlagen:
+        # raise ValueError(...)
+        print(f"Warning: weights.shape[1] = {M}, but N(N-1) = {expected_M}")
+
+    # Δt in Sekunden
+    dt = np.diff(weight_times) / 1000.0  # ms -> s  -> shape (n_snap-1,)
+
+    # Δw = w(t_{k+1}) - w(t_k)
+    dW = np.diff(weights, axis=0)        # (n_snap-1, M)
+
+    # Summe über alle Synapsen
+    sum_dW = dW.sum(axis=1)              # (n_snap-1,)
+
+    norm = float(N_total * (N_total - 1))
+    K = sum_dW / (norm * dt)             # (n_snap-1,)
+
+    # mittlere Zeitpunkte
+    t_mid = 0.5 * (weight_times[:-1] + weight_times[1:])
+
+    return t_mid, K

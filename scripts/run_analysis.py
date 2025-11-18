@@ -10,6 +10,7 @@ from src.analysis.metrics import (
     kuramoto_order_parameter,
     build_weight_matrix,
     normalize_weight_matrix,
+    mean_weight_change
 )
 from src.analysis.plotting import (
     plot_spike_raster,
@@ -17,11 +18,13 @@ from src.analysis.plotting import (
     plot_pdf_R,
     plot_pdf_mean_rate,
     plot_weight_matrix,
+    plot_K,
     plot_spike_raster_ax,
     plot_pdf_cv_ax,
     plot_pdf_R_ax,
     plot_pdf_mean_rate_ax,
-    plot_weight_matrix_ax
+    plot_weight_matrix_ax,
+    plot_K_ax
 )
 
 def load_run(run_dir: Path):
@@ -51,7 +54,16 @@ def load_run(run_dir: Path):
             "weights": d["weights"],
         }
 
-    return cfg, data, weights_data
+    wtraj_file = run_dir / "weights_trajectory.npz"
+    weights_over_time = None
+    if wtraj_file.exists():
+        d = np.load(wtraj_file)
+        weights_over_time = {
+            "times": d["times"],
+            "weights": d["weights"],  # shape (n_snap, M)
+        }
+
+    return cfg, data, weights_data, weights_over_time
 
 def find_latest_run_dir(results_root: Path) -> Path:
     """
@@ -102,7 +114,7 @@ def main():
     results_root = Path("results")
     run_dir = find_latest_run_dir(results_root)
     print(f"Using latest run directory: {run_dir}")
-    cfg, data, weights_data = load_run(run_dir)
+    cfg, data, weights_data, weights_over_time = load_run(run_dir)
 
     spikes_N = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
     N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
@@ -114,6 +126,13 @@ def main():
         N_total=N,
     )
     Wn = normalize_weight_matrix(W, cfg)
+
+    if weights_over_time is not None:
+        wt = weights_over_time["times"]
+        Wt = weights_over_time["weights"]  # (n_snap, M)
+        N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
+
+        t_mid, K = mean_weight_change(wt, Wt, N_total=N)
 
     rates_N, t_bins, mean_rate_population, mean_rates_per_neuron = instantaneous_rates(
         spikes_N["times"],
@@ -136,29 +155,28 @@ def main():
 
     fig = plt.figure(figsize=(12, 10))
     gs = fig.add_gridspec(
-        2, 6,
+        2, 8,
         height_ratios=[2.0, 1.5],
         hspace=0.5,
         wspace=0.4,
     )
 
     # Zeile 0: Raster über alle 3 Spalten
-    ax_raster = fig.add_subplot(gs[0, 0:4])
-    ax_W = fig.add_subplot(gs[0, 4:6])
+    ax_raster = fig.add_subplot(gs[0, 0:6])
+    ax_W = fig.add_subplot(gs[0, 6:8])
 
-    # Zeile 1: drei PDFs nebeneinander
+    # Zeile 1: 
     ax_cv   = fig.add_subplot(gs[1, 0:2])
     ax_R    = fig.add_subplot(gs[1, 2:4])
     ax_rate = fig.add_subplot(gs[1, 4:6])
-
-    # Zeile 2: Weight-Matrix über alle 3 Spalten
-    
+    ax_K    = fig.add_subplot(gs[1, 6:8])
 
     # Zeichnen
     plot_spike_raster_ax(ax_raster, data, cfg)
     plot_pdf_cv_ax(ax_cv, cv_N)
     plot_pdf_R_ax(ax_R, R)
     plot_pdf_mean_rate_ax(ax_rate, mean_rates_per_neuron)
+    plot_K_ax(ax_K, t_mid, K)
 
     im = plot_weight_matrix_ax(ax_W, Wn, cfg)
     cbar = fig.colorbar(im, ax=ax_W)
