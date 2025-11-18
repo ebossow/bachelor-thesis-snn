@@ -4,6 +4,7 @@ from pathlib import Path
 import datetime as dt
 import yaml
 import numpy as np
+import nest
 from typing import Dict, Any
 
 
@@ -16,7 +17,8 @@ def make_run_dir(root: Path, experiment_name: str) -> Path:
 
 def save_run(cfg: Dict[str, Any],
              data: Dict[str, Any],
-             run_dir: Path) -> None:
+             run_dir: Path,
+             pops) -> None:
     # Config
     with (run_dir / "config_resolved.yaml").open("w") as f:
         yaml.safe_dump(cfg, f)
@@ -38,3 +40,17 @@ def save_run(cfg: Dict[str, Any],
     }
     with (run_dir / "metadata.yaml").open("w") as f:
         yaml.safe_dump(meta, f)
+
+    all_neurons = pops["E"] + pops["IH"] + pops["IA"]
+    conns = nest.GetConnections(all_neurons, all_neurons)
+    sources = np.array(list(conns.sources()), dtype=int)      # pre-synaptic gids (1D array)
+    targets = np.array(list(conns.targets()), dtype=int)      # post-synaptic gids
+    weights = np.array(conns.get("weight"), dtype=float)      # list/array of weights
+
+    np.savez_compressed(
+        run_dir / "weights_final.npz",
+        sources=sources,
+        targets=targets,
+        weights=np.array(weights, float),
+    )
+    

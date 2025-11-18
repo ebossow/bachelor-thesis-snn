@@ -38,7 +38,7 @@ def instantaneous_rates(
     bin_size_ms: float,
 ) -> Tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
     """
-    ν_j(t) nach Gleichung (12), diskretisiert in Bins der Größe bin_size_ms.
+    v_j(t) nach Gleichung (12), diskretisiert in Bins der Größe bin_size_ms.
 
     times:   Spike-Zeiten in ms
     senders: NEST-GIDs (oder IDs) der Neuronen
@@ -62,13 +62,18 @@ def instantaneous_rates(
     if n_bins <= 0:
         raise ValueError("Ungültiger Zeitbereich oder Bin-Breite.")
 
+    # e.g Bin 0: ([t_edges[0], t_edges[1])
     t_edges = t_start + np.arange(n_bins + 1) * bin_size_ms
     t_centers = (t_edges[:-1] + t_edges[1:]) / 2.0
 
-    rates = np.zeros((N_population, n_bins), dtype=float)
+    counts = np.zeros((N_population, n_bins), dtype=float)
 
     if times.size == 0:
-        return rates, t_centers
+        # keine Spikes: alles 0
+        rates = counts  # bleib 0
+        mean_rates_per_neuron = np.zeros(N_population, dtype=float)
+        mean_rate_population = 0.0
+        return rates, t_centers, mean_rate_population, mean_rates_per_neuron
 
     sender_index = _build_sender_index(senders, N_population)
 
@@ -83,15 +88,21 @@ def instantaneous_rates(
         if j is None:
             # Neuron ohne Mapping (z.B. nie gespikt) wird ignoriert
             continue
-        rates[j, t_bin] += 1.0
+        counts[j, t_bin] += 1.0
 
-    # von Spike-Counts auf Rate (Hz): ms -> s ⇒ * 1000 / T
-    T = bin_size_ms / 1000.0  # s
-    rates /= T
-    rate_mean = rates.mean()
+    # von Spike-Counts auf Rate (Hz)
+    T_bin_s = bin_size_ms / 1000.0
+    rates = counts / T_bin_s  # shape (N, n_bins)
 
-    return rates, t_centers, rate_mean
+    # mittlere Feuerrate pro Neuron über gesamtes Zeitfenster
+    total_time_s = n_bins * T_bin_s
+    spike_counts_per_neuron = counts.sum(axis=1)          # shape (N,)
+    mean_rates_per_neuron = spike_counts_per_neuron / total_time_s  # Hz
 
+    # globaler Mittelwert über alle Neuronen
+    mean_rate_population = mean_rates_per_neuron.mean()
+
+    return rates, t_centers, mean_rate_population, mean_rates_per_neuron
 
 def population_rate(
     rates: npt.NDArray[np.floating],
@@ -240,3 +251,71 @@ def kuramoto_order_parameter(
         Phi[k] = np.angle(Z_t)
 
     return R, Phi
+
+
+def build_weight_matrix(
+    sources: np.ndarray,
+    targets: np.ndarray,
+    weights: np.ndarray,
+    N_total: int,
+) -> np.ndarray:
+    """
+    Build dense weight matrix W[post_idx, pre_idx] from connection lists.
+    Assumes gids are 1..N_total in order.
+    """
+    W = np.zeros((N_total, N_total), dtype=float)
+
+    sources = np.asarray(sources, int)
+    targets = np.asarray(targets, int)
+    weights = np.asarray(weights, float)
+
+    for src, tgt, w in zip(sources, targets, weights):
+        j_pre = src - 1   # 0-based
+        i_post = tgt - 1
+        if 0 <= j_pre < N_total and 0 <= i_post < N_total:
+            W[i_post, j_pre] = w
+    return W
+
+def normalize_weight_matrix(
+    W: np.ndarray,
+    cfg: Dict[str, Any],
+) -> np.ndarray:
+    """
+    Normalize weights to [-1,1] using per-projection Wmax from cfg.
+    Assumes population ordering: [E | IH | IA] both for pre and post.
+    """
+
+    N_E  = cfg["network"]["N_E"]
+    N_IH = cfg["network"]["N_IH"]
+    N_IA = cfg["network"]["N_IA"]
+    N_total = N_E + N_IH + N_IA
+
+    if W.shape != (N_total, N_total):
+        raise ValueError("Weight matrix shape does not match network size")
+
+    Wn = np.zeros_like(W, dtype=float)
+
+    # index ranges
+    E_slice  = slice(0, N_E)
+    IH_slice = slice(N_E, N_E + N_IH)
+    IA_slice = slice(N_E + N_IH, N_total)
+
+    syn_cfg = cfg["synapses"]
+
+    # E -> all (E, IH, IA)
+    Wmax_exc = float(syn_cfg["E_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])
+    if Wmax_exc <= 0:
+        raise ValueError("E_to_X Wmax must be > 0")
+    Wn[:, E_slice] = W[:, E_slice] / Wmax_exc  # columns: presyn E
+
+    # IH -> all
+    Wmax_ih = float(syn_cfg["IH_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])  # negative
+    Wn[:, IH_slice] = W[:, IH_slice] / abs(Wmax_ih)
+
+    # IA -> all
+    Wmax_ia = float(syn_cfg["IA_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])  # negative
+    Wn[:, IA_slice] = W[:, IA_slice] / abs(Wmax_ia)
+
+    # clip to [-1,1] for safety
+    np.clip(Wn, -1.0, 1.0, out=Wn)
+    return Wn

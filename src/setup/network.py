@@ -90,7 +90,7 @@ def connect_synapses(populations: Dict[str, Any],
 
     ia_to_x = synapse_cfg["IA_to_X"]
     _connect_projection(
-        src=IH,
+        src=IA,
         targets=[E, IH, IA],
         cfg=ia_to_x,
         base_Wmax=base_Wmax

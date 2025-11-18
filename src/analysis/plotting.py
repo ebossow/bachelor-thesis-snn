@@ -85,3 +85,45 @@ def plot_pdf_mean_rate(mean_rates: np.ndarray, bins: int = 50):
     """
     _plot_pdf(mean_rates, xlabel="Mean firing rate (Hz)",
               title="Distribution of mean firing rates", bins=bins)
+    
+
+def plot_weight_matrix(
+    Wn: np.ndarray,
+    cfg: Dict[str, Any],
+) -> None:
+    """
+    Plot normalized weight matrix Wn[post, pre] with colorbar in [-1,1].
+    Assumes populations in order [E | IH | IA].
+    """
+    N_E  = cfg["network"]["N_E"]
+    N_IH = cfg["network"]["N_IH"]
+    N_IA = cfg["network"]["N_IA"]
+    N_total = N_E + N_IH + N_IA
+
+    if Wn.shape != (N_total, N_total):
+        raise ValueError("Wn shape does not match network size")
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    im = ax.imshow(
+        Wn,
+        origin="lower",
+        vmin=-1.0,
+        vmax=1.0,
+        cmap="bwr",   # blue-white-red
+        interpolation="nearest",
+    )
+
+    ax.set_xlabel("Pre-synaptic neuron index")
+    ax.set_ylabel("Post-synaptic neuron index")
+
+    # Population boundaries
+    for x in [N_E, N_E + N_IH]:
+        ax.axvline(x - 0.5, color="k", linewidth=1)
+        ax.axhline(x - 0.5, color="k", linewidth=1)
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Normalized weight")
+
+    plt.tight_layout()
+    plt.show()

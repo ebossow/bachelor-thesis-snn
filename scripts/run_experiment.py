@@ -77,33 +77,11 @@ def main() -> None:
     plot_spike_raster(data, cfg)
     # hier: data + cfg in results/ speichern
 
-
-    #TODO: Das muss weg hier! das kommt in analyse script
-    spikes_E = data["spikes_E"]
-    N_E = cfg["network"]["N_E"]
-
-    rates_E, t_bins, mean_E = instantaneous_rates(
-        times=spikes_E["times"],
-        senders=spikes_E["senders"],
-        N_population=N_E,
-        t_start=0_000.0,
-        t_stop=cfg["experiment"]["simtime_ms"],
-        bin_size_ms=50.0,   # T = 0.05 s
-    )
-    #print(mean_E)
-    nu_E = population_rate(rates_E)
-    #print(nu_E)
-
-    cv_E = cv_isi(
-        times=spikes_E["times"],
-        senders=spikes_E["senders"],
-        N_population=N_E,
-    )
-    #print(cv_E)
-
     run_root = Path("results")
     run_dir = make_run_dir(run_root, cfg["experiment"]["name"])
-    save_run(cfg, data, run_dir)
+    save_run(cfg, data, run_dir, pops)
+
+    
 
 
 if __name__ == "__main__":

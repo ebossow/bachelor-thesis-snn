@@ -7,12 +7,15 @@ from src.analysis.metrics import (
     population_rate,
     cv_isi,
     kuramoto_order_parameter,
+    build_weight_matrix,
+    normalize_weight_matrix,
 )
 from src.analysis.plotting import (
     plot_spike_raster,
     plot_pdf_cv,
     plot_pdf_R,
     plot_pdf_mean_rate,
+    plot_weight_matrix,
 )
 
 def load_run(run_dir: Path):
@@ -31,7 +34,18 @@ def load_run(run_dir: Path):
         "spikes_IH": load_spikes("spikes_IH"),
         "spikes_IA": load_spikes("spikes_IA"),
     }
-    return cfg, data
+
+    weights_file = run_dir / "weights_final.npz"
+    weights_data = None
+    if weights_file.exists():
+        d = np.load(weights_file, allow_pickle=True)
+        weights_data = {
+            "sources": d["sources"],
+            "targets": d["targets"],
+            "weights": d["weights"],
+        }
+
+    return cfg, data, weights_data
 
 def find_latest_run_dir(results_root: Path) -> Path:
     """
@@ -82,12 +96,20 @@ def main():
     results_root = Path("results")
     run_dir = find_latest_run_dir(results_root)
     print(f"Using latest run directory: {run_dir}")
-    cfg, data = load_run(run_dir)
+    cfg, data, weights_data = load_run(run_dir)
 
     spikes_N = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
     N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
 
-    rates_N, t_bins, mean_rates_N = instantaneous_rates(
+    W = build_weight_matrix(
+        weights_data["sources"],
+        weights_data["targets"],
+        weights_data["weights"],
+        N_total=N,
+    )
+    Wn = normalize_weight_matrix(W, cfg)
+
+    rates_N, t_bins, mean_rate_population, mean_rates_per_neuron = instantaneous_rates(
         spikes_N["times"],
         spikes_N["senders"],
         N_population=N,
@@ -105,15 +127,13 @@ def main():
         t_eval=t_bins,
     )
 
-    #print(pop_rate_N)
-    #print(cv_N)
-    #print(R)
     # hier dann plotting-Funktionen aufrufen
     # plots
     plot_spike_raster(data, cfg)
+    plot_weight_matrix(Wn, cfg)
     plot_pdf_cv(cv_N)
     plot_pdf_R(R)
-    plot_pdf_mean_rate(mean_rates_N)
+    plot_pdf_mean_rate(mean_rates_per_neuron)
 
 if __name__ == "__main__":
     main()
