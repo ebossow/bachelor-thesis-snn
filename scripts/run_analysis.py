@@ -1,6 +1,7 @@
 from pathlib import Path
 import numpy as np
 import yaml
+import matplotlib.pyplot as plt
 
 from src.analysis.metrics import (
     instantaneous_rates,
@@ -16,6 +17,11 @@ from src.analysis.plotting import (
     plot_pdf_R,
     plot_pdf_mean_rate,
     plot_weight_matrix,
+    plot_spike_raster_ax,
+    plot_pdf_cv_ax,
+    plot_pdf_R_ax,
+    plot_pdf_mean_rate_ax,
+    plot_weight_matrix_ax
 )
 
 def load_run(run_dir: Path):
@@ -127,13 +133,47 @@ def main():
         t_eval=t_bins,
     )
 
+
+    fig = plt.figure(figsize=(12, 10))
+    gs = fig.add_gridspec(
+        2, 6,
+        height_ratios=[2.0, 1.5],
+        hspace=0.5,
+        wspace=0.4,
+    )
+
+    # Zeile 0: Raster über alle 3 Spalten
+    ax_raster = fig.add_subplot(gs[0, 0:4])
+    ax_W = fig.add_subplot(gs[0, 4:6])
+
+    # Zeile 1: drei PDFs nebeneinander
+    ax_cv   = fig.add_subplot(gs[1, 0:2])
+    ax_R    = fig.add_subplot(gs[1, 2:4])
+    ax_rate = fig.add_subplot(gs[1, 4:6])
+
+    # Zeile 2: Weight-Matrix über alle 3 Spalten
+    
+
+    # Zeichnen
+    plot_spike_raster_ax(ax_raster, data, cfg)
+    plot_pdf_cv_ax(ax_cv, cv_N)
+    plot_pdf_R_ax(ax_R, R)
+    plot_pdf_mean_rate_ax(ax_rate, mean_rates_per_neuron)
+
+    im = plot_weight_matrix_ax(ax_W, Wn, cfg)
+    cbar = fig.colorbar(im, ax=ax_W)
+    cbar.set_label("Normalized weight")
+
+    plt.tight_layout()
+    plt.show()
+
     # hier dann plotting-Funktionen aufrufen
     # plots
-    plot_spike_raster(data, cfg)
-    plot_weight_matrix(Wn, cfg)
-    plot_pdf_cv(cv_N)
-    plot_pdf_R(R)
-    plot_pdf_mean_rate(mean_rates_per_neuron)
+    #plot_spike_raster(data, cfg)
+    #plot_weight_matrix(Wn, cfg)
+    #plot_pdf_cv(cv_N)
+    #plot_pdf_R(R)
+    #plot_pdf_mean_rate(mean_rates_per_neuron)
 
 if __name__ == "__main__":
     main()
