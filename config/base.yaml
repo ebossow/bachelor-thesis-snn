@@ -77,7 +77,7 @@ synapses:
       lower_rel: 0.0
   weight_decay:
     enabled: true
-    decay_factor: 0.997
+    decay_factor: 0.999
     chunk_ms: 100.0
 
 stimulation:

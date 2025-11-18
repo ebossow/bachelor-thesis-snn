@@ -72,6 +72,8 @@ def main() -> None:
     data = run_simulation(
         simtime_ms=cfg["experiment"]["simtime_ms"],
         recording_devices=rec_devices,
+        populations=pops,
+        synapse_cfg=cfg["synapses"],
     )
 
     run_root = Path("results")
