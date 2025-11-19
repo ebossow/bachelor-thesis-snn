@@ -28,6 +28,7 @@ neuron_model:
     C_m: 600
     g_L: 30
     #t_ref: 0
+    tau_w: 1_000_000_000
 
 synapses:
   base_Wmax: 100
@@ -66,7 +67,7 @@ synapses:
     copy_model_name: "stdp_inh_sym_antihebb"
     synapse_parameter:
       tau: 20.0
-      eta: 0.001
+      eta: -0.001
       alpha: 0.13
     delay_ms: 0.5
     Wmax_factor: -4
