@@ -1,0 +1,42 @@
+# src/experiment/experiment_runner.py
+
+from pathlib import Path
+from typing import Dict, Any
+
+from src.setup.kernel import init_kernel
+from src.setup.network import build_populations, connect_synapses
+from src.setup.stimulation import setup_stimulation
+from src.setup.recording import setup_recording
+from src.setup.run_simulation import run_simulation
+from src.experiment.io import make_run_dir, save_run
+
+
+def run_experiment_with_cfg(cfg: Dict[str, Any]) -> Path:
+    """
+    Führe einen kompletten Run mit der gegebenen Config aus
+    und gib den run_dir zurück.
+    """
+    init_kernel(cfg["experiment"])
+
+    pops = build_populations(
+        network_cfg=cfg["network"],
+        noise_cfg=cfg["noise"],
+        neuron_model_cfg=cfg["neuron_model"],
+        excitability_cfg=cfg["neuron_excitability"],
+    )
+    connect_synapses(pops, cfg["synapses"])
+    stim_devs = setup_stimulation(pops, cfg["stimulation"])
+    rec_devs = setup_recording(pops, cfg["analysis"])
+
+    data = run_simulation(
+        simtime_ms=cfg["experiment"]["simtime_ms"],
+        recording_devices=rec_devs,
+        populations=pops,
+        synapse_cfg=cfg["synapses"],
+        record_weight_trajectory=True,  # für K(t)
+    )
+
+    run_root = Path("results")
+    run_dir = make_run_dir(run_root, cfg["experiment"]["name"])
+    save_run(cfg, data, run_dir, pops)
+    return run_dir

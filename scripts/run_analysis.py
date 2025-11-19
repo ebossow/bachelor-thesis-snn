@@ -34,7 +34,7 @@ def main():
     cfg, data, weights_data, weights_over_time = load_run(run_dir)
 
     metrics = compute_summary_metrics(cfg, data, weights_over_time)
-    print(metrics)
+    #print(metrics)
 
     # for plotting
     syn_cfg = cfg["synapses"]

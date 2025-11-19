@@ -1,0 +1,16 @@
+base_config: "config/base.yaml"
+
+search:
+  lambda_E:
+    values: [1e-4, 3e-4,]
+    #values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+  eta_IH:
+    values: [1e-4, 3e-4,]
+    #values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+  eta_IA:
+    values: [1e-4, 3e-4,]
+    #values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+
+# optional: weitere Parameter
+#  base_Wmax:
+#    values: [0.5, 1.0, 2.0]

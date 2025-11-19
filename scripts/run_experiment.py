@@ -3,13 +3,7 @@ import argparse
 from pathlib import Path
 
 from src.experiment.config_loader import load_base_config
-from src.experiment.io import make_run_dir, save_run
-from src.setup.kernel import init_kernel
-from src.setup.network import build_populations, connect_synapses
-from src.setup.stimulation import setup_stimulation
-from src.setup.recording import setup_recording
-from src.setup.run_simulation import run_simulation
-
+from src.experiment.experiment_runner import run_experiment_with_cfg
 
 from src.analysis.plotting import plot_spike_raster
 
@@ -41,45 +35,9 @@ def main() -> None:
     if args.eta_ia is not None:
         syn_cfg["IA_to_X"]["synapse_parameter"]["eta"] = args.eta_ia
 
-    # 2) Kernel initialisieren
-    init_kernel(cfg["experiment"])
-
-    # 3) Netzwerk aufbauen
-    pops = build_populations(
-        network_cfg=cfg["network"],
-        noise_cfg=cfg["noise"],
-        neuron_model_cfg=cfg["neuron_model"],
-        excitability_cfg=cfg["neuron_excitability"],
-    )
-
-    connect_synapses(
-        populations=pops,
-        synapse_cfg=cfg["synapses"],
-    )
-
-    # 4) Stimulation + Recording
-    stim_devices = setup_stimulation(
-        populations=pops,
-        stim_cfg=cfg["stimulation"],
-    )
-
-    rec_devices = setup_recording(
-        populations=pops,
-        analysis_cfg=cfg["analysis"],
-    )
-
-    # 5) Simulation
-    data = run_simulation(
-        simtime_ms=cfg["experiment"]["simtime_ms"],
-        recording_devices=rec_devices,
-        populations=pops,
-        synapse_cfg=cfg["synapses"],
-        record_weight_trajectory = True
-    )
-
-    run_root = Path("results")
-    run_dir = make_run_dir(run_root, cfg["experiment"]["name"])
-    save_run(cfg, data, run_dir, pops)
+    # 2) Experiment ausführen
+    run_dir = run_experiment_with_cfg(cfg)
+    print(f"Experiment finished. Results saved in {run_dir}")
 
 if __name__ == "__main__":
     main()
