@@ -11,7 +11,7 @@ from src.setup.run_simulation import run_simulation
 from src.experiment.io import make_run_dir, save_run
 
 
-def run_experiment_with_cfg(cfg: Dict[str, Any]) -> Path:
+def run_experiment_with_cfg(cfg: Dict[str, Any], result_path) -> Path:
     """
     Führe einen kompletten Run mit der gegebenen Config aus
     und gib den run_dir zurück.
@@ -36,7 +36,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any]) -> Path:
         record_weight_trajectory=True,  # für K(t)
     )
 
-    run_root = Path("results")
-    run_dir = make_run_dir(run_root, cfg["experiment"]["name"])
+    #run_root = Path("results")
+    run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
     save_run(cfg, data, run_dir, pops)
     return run_dir

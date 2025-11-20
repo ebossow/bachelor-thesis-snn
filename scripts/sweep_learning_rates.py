@@ -45,7 +45,7 @@ def main():
         cfg["experiment"]["name"] = f"sweep_lam{float(lam):g}_etaIH{float(eta_IH):g}_etaIA{float(eta_IA):g}"
 
         # Experiment laufen lassen -> run_dir zurückbekommen
-        run_dir = run_experiment_with_cfg(cfg)
+        run_dir = run_experiment_with_cfg(cfg, sweep_root)
 
         # Run laden und Metriken berechnen
         cfg_run, data, weights_data, weights_over_time = load_run(run_dir)
