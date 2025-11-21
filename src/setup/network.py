@@ -5,6 +5,11 @@ from typing import Dict, Any
 import nest
 import numpy as np
 
+def _truncated_normal_upper(rng: np.random.Generator, mean: float, std: float, upper: float, lower: float, size: int):
+    samples = rng.normal(loc=mean, scale=std, size=size)
+    clipped_samples = np.minimum(samples, upper)
+    clipped_samples = np.maximum(clipped_samples, lower)
+    return clipped_samples
 
 def build_populations(network_cfg: Dict[str, Any],
                       noise_cfg: Dict[str, Any],
@@ -35,8 +40,7 @@ def build_populations(network_cfg: Dict[str, Any],
         mean = excitability_cfg["mean_pA"]
         std = excitability_cfg["std_pA"]
 
-        I_e_values = rng.normal(loc=mean, scale=std, size=N_E + N_IH + N_IA)
-        #TODO Clipping mit upper/lower_bound_pA
+        I_e_values = _truncated_normal_upper(rng=rng, mean=mean, std=std, upper=excitability_cfg["upper_bound_pA"], lower=excitability_cfg["lower_bound_pA"], size=N_E + N_IH + N_IA)
 
         for gid, I_e in zip(E + IH + IA, I_e_values):
             nest.SetStatus(gid, {"I_e": I_e})
@@ -70,6 +74,7 @@ def connect_synapses(populations: Dict[str, Any],
     IA = populations["IA"]
 
     base_Wmax = synapse_cfg["base_Wmax"]
+    base_LR = synapse_cfg["base_LR"]
 
     # Beispiel: E_to_X (E -> E, IH, IA)
     e_to_x = synapse_cfg["E_to_X"]
@@ -77,7 +82,8 @@ def connect_synapses(populations: Dict[str, Any],
         src=E,
         targets=[E, IH, IA],
         cfg=e_to_x,
-        base_Wmax=base_Wmax
+        base_Wmax=base_Wmax,
+        base_LR=base_LR
     )
 
     ih_to_x = synapse_cfg["IH_to_X"]
@@ -85,7 +91,8 @@ def connect_synapses(populations: Dict[str, Any],
         src=IH,
         targets=[E, IH, IA],
         cfg=ih_to_x,
-        base_Wmax=base_Wmax
+        base_Wmax=base_Wmax,
+        base_LR=base_LR
     )
 
     ia_to_x = synapse_cfg["IA_to_X"]
@@ -93,11 +100,12 @@ def connect_synapses(populations: Dict[str, Any],
         src=IA,
         targets=[E, IH, IA],
         cfg=ia_to_x,
-        base_Wmax=base_Wmax
+        base_Wmax=base_Wmax,
+        base_LR=base_LR
     )
 
 
-def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax) -> None:
+def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR) -> None:
     """
     Hilfsfunktion: eine Projektion mit init-Gewichten aufbauen.
     """
@@ -106,6 +114,10 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax) -> None:
     synapse_parameter = cfg["synapse_parameter"]
     synapse_parameter["Wmax"] = base_Wmax * cfg["Wmax_factor"]
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
+    if cfg["copy_model_name"] == "stdp_ex_asym":
+        synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
+    elif cfg["copy_model_name"] in ["stdp_inh_sym_hebb", "stdp_inh_sym_antihebb"]:
+        synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}

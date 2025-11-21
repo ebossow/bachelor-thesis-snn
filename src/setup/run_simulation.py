@@ -99,7 +99,7 @@ def run_simulation(
             # ggf. Decay nur alle every_n Chunks
             if (i + 1) % every_n == 0:
                 factor = decay_factor ** every_n  # effektiver Faktor für diesen Block
-                _apply_weight_decay_clipped(conn_E,  factor, 0.0,           Wmax_exc)
+                _apply_weight_decay_clipped(conn_E,  factor, 0.0, Wmax_exc)
                 _apply_weight_decay_clipped(conn_IH, factor, Wmax_inh_hebb, 0.0)
                 _apply_weight_decay_clipped(conn_IA, factor, Wmax_inh_anti, 0.0)
 

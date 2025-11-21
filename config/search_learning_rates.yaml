@@ -3,13 +3,13 @@ base_config: "config/base_sweeps.yaml"
 search:
   lambda_E:
     #values: [1e-4, 3e-4,]
-    values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    values: [0.01, 0.015, 0.022, 0.03, 0.04]
   eta_IH:
     #values: [1e-4, 3e-4,]
-    values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    values: [0.003, 0.008, 0.015, 0.02, 0.03]
   eta_IA:
     #values: [1e-4, 3e-4,]
-    values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+    values: [0.003, 0.008, 0.015, 0.02, 0.03]
 
 # optional: weitere Parameter
 #  base_Wmax:

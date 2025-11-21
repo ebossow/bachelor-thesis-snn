@@ -48,7 +48,7 @@ def run_single_config(
     )
 
     # Experiment laufen lassen -> run_dir (unter result_path)
-    run_dir = run_experiment_with_cfg(cfg, result_path)
+    run_dir = run_experiment_with_cfg(cfg, result_path, mulithreaded=True)
 
     # Run laden und Metriken berechnen
     cfg_run, data, weights_data, weights_over_time = load_run(run_dir)

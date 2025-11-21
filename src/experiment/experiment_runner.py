@@ -11,7 +11,7 @@ from src.setup.run_simulation import run_simulation
 from src.experiment.io import make_run_dir, save_run
 
 
-def run_experiment_with_cfg(cfg: Dict[str, Any], result_path) -> Path:
+def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=False) -> Path:
     """
     Führe einen kompletten Run mit der gegebenen Config aus
     und gib den run_dir zurück.
@@ -37,6 +37,12 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path) -> Path:
     )
 
     #run_root = Path("results")
-    run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
-    save_run(cfg, data, run_dir, pops)
-    return run_dir
+    if multithreaded:
+        run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
+        save_run(cfg, data, run_dir, pops)
+        return run_dir
+    else:
+        #run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
+        save_run(cfg, data, result_path, pops)
+        return result_path
+    

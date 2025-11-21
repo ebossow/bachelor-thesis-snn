@@ -29,7 +29,10 @@ def compute_summary_metrics(
     N    = N_E + N_IH + N_IA
 
     simtime_ms = cfg["experiment"]["simtime_ms"]
-    t_off_ms   = cfg["stimulation"]["dc"]["t_off_ms"]
+    if cfg["stimulation"]["dc"]["enabled"]:
+        t_off_ms   = cfg["stimulation"]["dc"]["t_off_ms"]
+    else:
+        t_off_ms   = 0.0
 
     # --- Spikes: Gesamt und E-only, jeweils nur nach Stimulus ---
     # Gesamt

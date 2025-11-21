@@ -32,6 +32,7 @@ neuron_model:
 
 synapses:
   base_Wmax: 100
+  base_LR: 0.001
   E_to_X:
     model: "stdp_synapse"
     copy_model_name: "stdp_ex_asym"
@@ -43,6 +44,7 @@ synapses:
       mu_minus: 0
     delay_ms: 0.5
     Wmax_factor: 1
+    LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -57,6 +59,7 @@ synapses:
       alpha: 0.13
     delay_ms: 0.5
     Wmax_factor: -2
+    LR_factor: 7.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -71,6 +74,7 @@ synapses:
       alpha: 0.13
     delay_ms: 0.5
     Wmax_factor: -4
+    LR_factor: -14.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -78,7 +82,7 @@ synapses:
       lower_rel: 0.0
   weight_decay:
     enabled: true
-    decay_factor: 0.999
+    decay_factor: 1
     chunk_ms: 100.0
     every_n_chunks: 10
 
