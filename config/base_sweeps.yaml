@@ -32,17 +32,20 @@ neuron_model:
 
 synapses:
   base_Wmax: 100
+  base_LR: 0.001
+  global_lr: 0.005
   E_to_X:
     model: "stdp_synapse"
     copy_model_name: "stdp_ex_asym"
     synapse_parameter:
-      tau_plus: 5.0
+      tau_plus: 20.0
       lambda: 0.003
       alpha: 0.35
       mu_plus: 0
       mu_minus: 0
     delay_ms: 0.5
     Wmax_factor: 1
+    LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -52,11 +55,12 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_hebb"
     synapse_parameter:
-      tau: 20.0
+      tau: 100.0
       eta: 0.001
       alpha: 0.13
     delay_ms: 0.5
-    Wmax_factor: -2
+    Wmax_factor: -16
+    LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -66,11 +70,12 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_antihebb"
     synapse_parameter:
-      tau: 20.0
+      tau: 100.0
       eta: -0.001
       alpha: 0.13
     delay_ms: 0.5
-    Wmax_factor: -4
+    Wmax_factor: -32
+    LR_factor: -32.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5

@@ -1,58 +1,38 @@
-from pathlib import Path
-import argparse
+# src/analysis/summary_figure.py
+
+from typing import Dict, Any
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.analysis.summary_metrics import compute_summary_metrics
-from src.analysis.summary_figure import create_summary_figure
-
-from src.analysis.metrics import (
-    build_weight_matrix,
-    normalize_weight_matrix,
-
-)
-from src.analysis.plotting import (
-    plot_spike_raster,
-    plot_pdf_cv,
-    plot_pdf_R,
-    plot_pdf_mean_rate,
-    plot_weight_matrix,
-    plot_K,
+from .plotting import (
     plot_spike_raster_ax,
     plot_pdf_cv_ax,
     plot_pdf_R_ax,
     plot_pdf_mean_rate_ax,
     plot_weight_matrix_ax,
-    plot_K_ax
+    plot_K_ax,
 )
+from .metrics import build_weight_matrix, normalize_weight_matrix
 
-from src.analysis.util import load_run, find_latest_run_dir
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--run_dir", type=str, default=None)
-    return p.parse_args()
-
-def main():
-
-    args = parse_args()
-    if args.run_dir is not None:
-        run_dir = Path(args.run_dir)
-        print(f"Using specified run directory: {run_dir}")
-    else:
-        results_root = Path("results")
-        run_dir = find_latest_run_dir(results_root)
-        print(f"Using latest run directory: {run_dir}")
-    cfg, data, weights_data, weights_over_time = load_run(run_dir)
-
-    metrics = compute_summary_metrics(cfg, data, weights_over_time)
-    #print(metrics)
-
-    fig = create_summary_figure(cfg, data, metrics, weights_data)
-
-    plt.show()
+def create_summary_figure(
+    cfg: Dict[str, Any],
+    data: Dict[str, Any],
+    metrics: Dict[str, Any],
+    weights_data: Dict[str, Any] | None = None,
+) -> plt.Figure:
     """
-    # for plotting
+    Erzeugt die kombinierte Analyse-Figur für einen Run und gibt die Figure zurück.
+    Kein plt.show(), kein Savefig hier – das machen die Aufrufer.
+
+    Erwartet:
+      - cfg: Config
+      - data: enthält spikes_E, spikes_IH, spikes_IA, ...
+      - metrics: Output von compute_summary_metrics (inkl. Arrays)
+      - weights_data: dict mit "sources", "targets", "weights" oder None
+    """
+
     syn_cfg = cfg["synapses"]
     base_Wmax = syn_cfg["base_Wmax"]
     global_lr = syn_cfg["global_lr"]
@@ -122,8 +102,5 @@ def main():
     cbar.set_label("Normalized weight")
 
     plt.tight_layout()
-    plt.show()
-    """
 
-if __name__ == "__main__":
-    main()
+    return fig

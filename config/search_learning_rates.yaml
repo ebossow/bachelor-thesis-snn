@@ -1,16 +1,12 @@
-base_config: "config/base_sweeps.yaml"
+base_config: "config/base.yaml"
 
-search:
-  lambda_E:
-    #values: [1e-4, 3e-4,]
-    values: [0.01, 0.015, 0.022, 0.03, 0.04]
-  eta_IH:
-    #values: [1e-4, 3e-4,]
-    values: [0.003, 0.008, 0.015, 0.02, 0.03]
-  eta_IA:
-    #values: [1e-4, 3e-4,]
-    values: [0.003, 0.008, 0.015, 0.02, 0.03]
+parameters:
+  - name: "global_lr"
+    path: "synapses.global_lr"
+    values: [0.001, 0.005, 0.01, 0.02, 0.03, 0.05]
+    #values: [0.001, 0.005]
 
-# optional: weitere Parameter
-#  base_Wmax:
-#    values: [0.5, 1.0, 2.0]
+  - name: "base_Wmax"
+    path: "synapses.base_Wmax"
+    values: [1, 2, 5, 10, 20, 40, 60, 100]
+    #values: [1, 2]
