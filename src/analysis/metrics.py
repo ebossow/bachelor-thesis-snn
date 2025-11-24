@@ -164,7 +164,7 @@ def cv_isi(
         if ts.size < min_spikes:
             continue
         isi = np.diff(ts)
-        print("ISI: ", isi)
+        #print("ISI: ", isi)
         if isi.size == 0:
             continue
         mu = isi.mean()

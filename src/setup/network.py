@@ -75,6 +75,7 @@ def connect_synapses(populations: Dict[str, Any],
 
     base_Wmax = synapse_cfg["base_Wmax"]
     base_LR = synapse_cfg["base_LR"]
+    global_lr = synapse_cfg["global_lr"]
 
     # Beispiel: E_to_X (E -> E, IH, IA)
     e_to_x = synapse_cfg["E_to_X"]
@@ -83,7 +84,8 @@ def connect_synapses(populations: Dict[str, Any],
         targets=[E, IH, IA],
         cfg=e_to_x,
         base_Wmax=base_Wmax,
-        base_LR=base_LR
+        base_LR=base_LR,
+        global_lr=global_lr
     )
 
     ih_to_x = synapse_cfg["IH_to_X"]
@@ -92,7 +94,8 @@ def connect_synapses(populations: Dict[str, Any],
         targets=[E, IH, IA],
         cfg=ih_to_x,
         base_Wmax=base_Wmax,
-        base_LR=base_LR
+        base_LR=base_LR,
+        global_lr=global_lr
     )
 
     ia_to_x = synapse_cfg["IA_to_X"]
@@ -101,11 +104,12 @@ def connect_synapses(populations: Dict[str, Any],
         targets=[E, IH, IA],
         cfg=ia_to_x,
         base_Wmax=base_Wmax,
-        base_LR=base_LR
+        base_LR=base_LR,
+        global_lr=global_lr
     )
 
 
-def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR) -> None:
+def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr) -> None:
     """
     Hilfsfunktion: eine Projektion mit init-Gewichten aufbauen.
     """
@@ -115,9 +119,13 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR) -
     synapse_parameter["Wmax"] = base_Wmax * cfg["Wmax_factor"]
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
     if cfg["copy_model_name"] == "stdp_ex_asym":
-        synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
-    elif cfg["copy_model_name"] in ["stdp_inh_sym_hebb", "stdp_inh_sym_antihebb"]:
-        synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
+        #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
+        synapse_parameter["lambda"] = 2.347 * global_lr # hardcoded mit max_change_rate_excitatory
+    elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
+        #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
+        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # hardcoded mit max_change_rate_inhibitory * Wmax
+    elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
+        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # hardcoded mit max_change_rate_inhibitory * Wmax
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}

@@ -18,6 +18,7 @@ def parse_args():
     p.add_argument("--lambda_exc", type=float, default=None)
     p.add_argument("--eta_ih", type=float, default=None)
     p.add_argument("--eta_ia", type=float, default=None)
+    p.add_argument("--global_lr", type=float, default=None)
     return p.parse_args()
 
 def main() -> None:
@@ -38,6 +39,8 @@ def main() -> None:
         syn_cfg["IH_to_X"]["synapse_parameter"]["eta"] = args.eta_ih
     if args.eta_ia is not None:
         syn_cfg["IA_to_X"]["synapse_parameter"]["eta"] = args.eta_ia
+    if args.global_lr is not None:
+        syn_cfg["global_lr"] = args.global_lr
 
     # 2) Experiment ausführen
 

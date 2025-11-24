@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -26,11 +27,21 @@ from src.analysis.plotting import (
 
 from src.analysis.util import load_run, find_latest_run_dir
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--run_dir", type=str, default=None)
+    return p.parse_args()
 
 def main():
-    results_root = Path("results")
-    run_dir = find_latest_run_dir(results_root)
-    print(f"Using latest run directory: {run_dir}")
+
+    args = parse_args()
+    if args.run_dir is not None:
+        run_dir = Path(args.run_dir)
+        print(f"Using specified run directory: {run_dir}")
+    else:
+        results_root = Path("results")
+        run_dir = find_latest_run_dir(results_root)
+        print(f"Using latest run directory: {run_dir}")
     cfg, data, weights_data, weights_over_time = load_run(run_dir)
 
     metrics = compute_summary_metrics(cfg, data, weights_over_time)
