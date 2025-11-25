@@ -21,7 +21,10 @@ def setup_stimulation(populations: Dict[str, Any],
         pulse_ms = stim_cfg["pattern"]["pulse_ms"]
         gap_ms = stim_cfg["pattern"]["gap_ms"]
         split = stim_cfg["pattern"]["split"]
-        rng_seed = stim_cfg["pattern"]["rng_seed"]
+        if stim_cfg["pattern"]["use_seed"]:
+            rng_seed = stim_cfg["pattern"]["rng_seed"]
+        else:
+            rng_seed = None
 
         cycle_ms = pulse_ms + gap_ms
 

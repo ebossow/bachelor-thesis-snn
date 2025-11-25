@@ -29,6 +29,7 @@ neuron_model:
     g_L: 30
     #t_ref: 0
     tau_w: 1_000_000_000
+    tau_minus: 50.0
 
 synapses:
   base_Wmax: 100
@@ -55,9 +56,9 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_hebb"
     synapse_parameter:
-      tau: 100.0
+      tau: 35.0
       eta: 0.001
-      alpha: 0.13
+      alpha: 0.05
     delay_ms: 0.5
     Wmax_factor: -16
     LR_factor: 16.0
@@ -70,9 +71,9 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_antihebb"
     synapse_parameter:
-      tau: 100.0
+      tau: 35.0
       eta: -0.001
-      alpha: 0.13
+      alpha: 0.05
     delay_ms: 0.5
     Wmax_factor: -32
     LR_factor: -32.0
@@ -83,7 +84,7 @@ synapses:
       lower_rel: 0.0
   weight_decay:
     enabled: true
-    decay_factor: 0.999
+    decay_factor: 0.9985
     chunk_ms: 100.0
     every_n_chunks: 10
 
@@ -99,6 +100,7 @@ stimulation:
     gap_ms: 200.0
     split: 2
     rng_seed: 1234
+    use_seed: false
 
 neuron_excitability:
   enabled: true
