@@ -11,6 +11,8 @@ experiment:
 network:
   N_E: 80
   N_IH: 10
+  N_IA_1: 5
+  N_IA_2: 5
   N_IA: 10
 
 neuron_model:
@@ -46,7 +48,7 @@ synapses:
       mu_minus: 0
     delay_ms: 0.5
     Wmax_factor: 1
-    LR_factor: 1.0
+    #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -61,7 +63,7 @@ synapses:
       alpha: 0.05
     delay_ms: 0.5
     Wmax_factor: -16
-    LR_factor: 16.0
+    #LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -76,7 +78,7 @@ synapses:
       alpha: 0.05
     delay_ms: 0.5
     Wmax_factor: -32
-    LR_factor: -32.0
+    #LR_factor: -32.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -84,7 +86,7 @@ synapses:
       lower_rel: 0.0
   weight_decay:
     enabled: true
-    decay_factor: 0.9985
+    decay_factor: 1
     chunk_ms: 100.0
     every_n_chunks: 10
 

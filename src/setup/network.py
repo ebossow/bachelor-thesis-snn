@@ -20,17 +20,23 @@ def build_populations(network_cfg: Dict[str, Any],
     """
 
     N_E = network_cfg["N_E"]
+    N_IA_1 = network_cfg["N_IA_1"]
     N_IH = network_cfg["N_IH"]
-    N_IA = network_cfg["N_IA"]
+    N_IA_2 = network_cfg["N_IA_2"]
+    N_IA = N_IA_1 + N_IA_2
+
 
     model_name = neuron_model_cfg["name"]
     neuron_params = neuron_model_cfg["params"]
     #print("Model Name: ", model_name, " Params: ", neuron_params)
 
     E = nest.Create(model_name, N_E, params=neuron_params)
+    IA_1 = nest.Create(model_name, N_IA_1, params=neuron_params)
     IH = nest.Create(model_name, N_IH, params=neuron_params)
-    IA = nest.Create(model_name, N_IA, params=neuron_params)
+    IA_2 = nest.Create(model_name, N_IA_2, params=neuron_params)
+    IA = IA_1 + IA_2
 
+    print(f"Created populations: E({E}), IH({IH}), IA({IA_1}+{IA_2})")
     # neuron_excitability: I_e pro Neuron
     if excitability_cfg.get("enabled", False):
         rng = np.random.default_rng(
@@ -120,18 +126,18 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
     if cfg["copy_model_name"] == "stdp_ex_asym":
         #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["lambda"] = 2.347 * global_lr # hardcoded mit max_change_rate_excitatory
+        synapse_parameter["lambda"] = 2.347 * global_lr # max_change_rate_excitatory
     elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
         #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # hardcoded mit max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
     elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
-        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # hardcoded mit max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}
     syn_spec = {
         "synapse_model": copy_name,
-        "weight": nest.random.normal(mean = 0.5, std = 0.2) * synapse_parameter["Wmax"],
+        "weight": nest.random.normal(mean = 0, std = 0.2) * synapse_parameter["Wmax"],
         "delay": cfg["delay_ms"]
     }
     for target in targets:
