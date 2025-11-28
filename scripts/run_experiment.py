@@ -26,7 +26,6 @@ def main() -> None:
     # 1) Config laden
     cfg_path = Path("config/base.yaml")
     cfg = load_base_config(cfg_path)
-    print("CFG: ", cfg)
 
     # load arguments from cli
     syn_cfg = cfg["synapses"]

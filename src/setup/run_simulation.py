@@ -16,7 +16,8 @@ def _apply_weight_decay_clipped(conns,
     and clip to [clip_min, clip_max].
     """
     weights = np.array(conns.get("weight"), dtype=float)
-    weights *= decay_factor
+    #weights *= decay_factor
+    weights -= decay_factor
     np.clip(weights, clip_min, clip_max, out=weights)
     conns.set({"weight": weights})
 
@@ -84,6 +85,7 @@ def run_simulation(
     if decay_enabled:
         every_n = int(decay_cfg.get("every_n_chunks", 1))
         decay_factor = float(decay_cfg.get("decay_factor", 1.0))
+        decay_summand = float(decay_cfg.get("decay_summand", 0.0))
         chunk_ms = float(decay_cfg.get("chunk_ms", simtime_ms))
 
         if chunk_ms <= 0.0:
@@ -99,7 +101,9 @@ def run_simulation(
             # ggf. Decay nur alle every_n Chunks
             if (i + 1) % every_n == 0:
                 factor = decay_factor ** every_n  # effektiver Faktor für diesen Block
-                _apply_weight_decay_clipped(conn_E,  factor, 0.0, Wmax_exc)
+                summand = decay_summand * every_n * chunk_ms
+                #_apply_weight_decay_clipped(conn_E,  factor, 0.0, Wmax_exc)
+                _apply_weight_decay_clipped(conn_E,  summand, 0.0, Wmax_exc)
                 #_apply_weight_decay_clipped(conn_IH, factor, Wmax_inh_hebb, 0.0)
                 #_apply_weight_decay_clipped(conn_IA, factor, Wmax_inh_anti, 0.0)
 

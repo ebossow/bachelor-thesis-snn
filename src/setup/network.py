@@ -36,7 +36,7 @@ def build_populations(network_cfg: Dict[str, Any],
     IA_2 = nest.Create(model_name, N_IA_2, params=neuron_params)
     IA = IA_1 + IA_2
 
-    print(f"Created populations: E({E}), IH({IH}), IA({IA_1}+{IA_2})")
+    #print(f"Created populations: E({E}), IH({IH}), IA({IA_1}+{IA_2})")
     # neuron_excitability: I_e pro Neuron
     if excitability_cfg.get("enabled", False):
         rng = np.random.default_rng(
@@ -53,12 +53,12 @@ def build_populations(network_cfg: Dict[str, Any],
 
     # neuron_noise: Noise pro Neuron
     if noise_cfg.get("enabled", False):
-        mean = noise_cfg["noise_mean"]
-        std = noise_cfg["noise_std"]
+        noise_mean = noise_cfg["noise_mean"]
+        noise_std = noise_cfg["noise_std"]
         noise_w = noise_cfg["weight"]
         noise = nest.Create("noise_generator", params={
-            "mean": mean,
-            "std": std,
+            "mean": noise_mean,
+            "std": noise_std,
         })
 
         for gid in E + IH + IA:
@@ -113,6 +113,9 @@ def connect_synapses(populations: Dict[str, Any],
         base_LR=base_LR,
         global_lr=global_lr
     )
+
+    synapse_cfg["weight_decay"]["decay_summand"] = synapse_cfg["E_to_X"]["synapse_parameter"]["lambda"] * 0.03
+    print("Decay Summand set to: ", synapse_cfg["weight_decay"]["decay_summand"])
 
 
 def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr) -> None:
