@@ -24,7 +24,7 @@ def parse_args():
 def main() -> None:
     args = parse_args()
     # 1) Config laden
-    cfg_path = Path("config/base.yaml")
+    cfg_path = Path(args.config) if args.config is not None else Path("config/base.yaml")
     cfg = load_base_config(cfg_path)
 
     # load arguments from cli

@@ -5,8 +5,8 @@ experiment:
   simtime_ms: 60000
   seed: 12345
   nest:
-    resolution_ms: 0.1
-    threads: 5
+    resolution_ms: 1
+    threads: 6
 
 network:
   N_E: 80
@@ -34,9 +34,9 @@ neuron_model:
     tau_minus: 50.0
 
 synapses:
-  base_Wmax: 100
+  base_Wmax: 40
   base_LR: 0.001
-  global_lr: 0.005
+  global_lr: 0.008
   E_to_X:
     model: "stdp_synapse"
     copy_model_name: "stdp_ex_asym"
@@ -85,7 +85,7 @@ synapses:
       std: 0.2
       lower_rel: 0.0
   weight_decay:
-    enabled: true
+    enabled: false
     decay_factor: 1
     decay_summand: 0
     chunk_ms: 100.0

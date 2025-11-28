@@ -115,7 +115,7 @@ def connect_synapses(populations: Dict[str, Any],
     )
 
     synapse_cfg["weight_decay"]["decay_summand"] = synapse_cfg["E_to_X"]["synapse_parameter"]["lambda"] * 0.03
-    print("Decay Summand set to: ", synapse_cfg["weight_decay"]["decay_summand"])
+    #print("Decay Summand set to: ", synapse_cfg["weight_decay"]["decay_summand"])
 
 
 def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr) -> None:

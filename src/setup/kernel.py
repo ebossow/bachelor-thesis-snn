@@ -22,6 +22,7 @@ def init_kernel(experiment_cfg: Dict[str, Any]) -> None:
     nest.SetKernelStatus({
         "resolution": resolution,
         "local_num_threads": threads,
+        "print_time": True,
     })
 
     if seed is not None:
