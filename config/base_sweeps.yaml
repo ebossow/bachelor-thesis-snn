@@ -11,10 +11,12 @@ experiment:
 network:
   N_E: 80
   N_IH: 10
+  N_IA_1: 5
+  N_IA_2: 5
   N_IA: 10
 
 neuron_model:
-  name: "aeif_psc_alpha"
+  name: "aeif_psc_exp"
   params:
     a: 0.0
     b: 0.0
@@ -29,6 +31,7 @@ neuron_model:
     g_L: 30
     #t_ref: 0
     tau_w: 1_000_000_000
+    tau_minus: 50.0
 
 synapses:
   base_Wmax: 100
@@ -45,7 +48,7 @@ synapses:
       mu_minus: 0
     delay_ms: 0.5
     Wmax_factor: 1
-    LR_factor: 1.0
+    #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -55,12 +58,12 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_hebb"
     synapse_parameter:
-      tau: 100.0
+      tau: 35.0
       eta: 0.001
-      alpha: 0.13
+      alpha: 0.05
     delay_ms: 0.5
-    Wmax_factor: -32
-    LR_factor: 16.0
+    Wmax_factor: -16
+    #LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -70,12 +73,12 @@ synapses:
     model: "vogels_sprekeler_synapse"
     copy_model_name: "stdp_inh_sym_antihebb"
     synapse_parameter:
-      tau: 100.0
+      tau: 35.0
       eta: -0.001
-      alpha: 0.13
+      alpha: 0.05
     delay_ms: 0.5
-    Wmax_factor: -16
-    LR_factor: -32.0
+    Wmax_factor: -32
+    #LR_factor: -32.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
       mean: 0.5
@@ -83,7 +86,7 @@ synapses:
       lower_rel: 0.0
   weight_decay:
     enabled: true
-    decay_factor: 0.999
+    decay_factor: 1
     chunk_ms: 100.0
     every_n_chunks: 10
 

@@ -305,8 +305,8 @@ def normalize_weight_matrix(
 
     # E -> all (E, IH, IA)
     Wmax_exc = float(syn_cfg["E_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])
-    if Wmax_exc <= 0:
-        raise ValueError("E_to_X Wmax must be > 0")
+    if Wmax_exc < 0:
+        raise ValueError("E_to_X Wmax must be >= 0")
     Wn[:, E_slice] = W[:, E_slice] / Wmax_exc  # columns: presyn E
 
     # IH -> all

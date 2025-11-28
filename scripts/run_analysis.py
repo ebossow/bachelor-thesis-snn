@@ -31,11 +31,14 @@ from src.analysis.util import load_run, find_latest_run_dir
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--run_dir", type=str, default=None)
+    p.add_argument("--small_figure", type=bool, default=False,
+                   help="If True, only plot spike raster in small figure.")
     return p.parse_args()
 
 def main():
 
     args = parse_args()
+    small_figure = args.small_figure
     if args.run_dir is not None:
         run_dir = Path(args.run_dir)
         print(f"Using specified run directory: {run_dir}")
@@ -49,6 +52,10 @@ def main():
     #print(metrics)
 
     fig = create_summary_figure(cfg, data, metrics, weights_data)
+
+    if small_figure:
+        fig, ax_raster = plt.subplots(figsize=(10, 5))
+        plot_spike_raster_ax(ax_raster, data, cfg)
 
     plt.show()
     """

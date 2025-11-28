@@ -16,7 +16,7 @@ network:
   N_IA: 10
 
 neuron_model:
-  name: "aeif_psc_alpha"
+  name: "aeif_psc_exp"
   params:
     a: 0.0
     b: 0.0
@@ -47,7 +47,7 @@ synapses:
       mu_plus: 0
       mu_minus: 0
     delay_ms: 0.5
-    Wmax_factor: 1
+    Wmax_factor: 8
     #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"

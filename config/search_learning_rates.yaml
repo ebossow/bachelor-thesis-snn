@@ -3,10 +3,10 @@ base_config: "config/base_sweeps.yaml"
 parameters:
   - name: "global_lr"
     path: "synapses.global_lr"
-    values: [0.001, 0.003, 0.004, 0.005, 0.007, 0.01]
+    values: [0.007, 0.01, 0.02, 0.05, 0.08]
     #values: [0.001, 0.005]
 
   - name: "base_Wmax"
     path: "synapses.base_Wmax"
-    values: [2, 5, 10, 15, 20, 30]
+    values: [30, 50, 70, 100]
     #values: [1, 2]
