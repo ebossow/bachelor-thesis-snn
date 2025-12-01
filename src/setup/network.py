@@ -129,12 +129,12 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
     if cfg["copy_model_name"] == "stdp_ex_asym":
         #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["lambda"] = 2.347 * global_lr # max_change_rate_excitatory
+        synapse_parameter["lambda"] = 0 * 2.347 * global_lr # max_change_rate_excitatory
     elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
         #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = 0 * -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
     elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
-        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = 0 * synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}

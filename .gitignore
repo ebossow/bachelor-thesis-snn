@@ -13,6 +13,7 @@ env/
 
 # Ergebnisse / große Dateien
 results/
+data/
 *.npz
 
 # Sonstiges

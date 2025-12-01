@@ -30,7 +30,7 @@ def compute_summary_metrics(
 
     simtime_ms = cfg["experiment"]["simtime_ms"]
     if cfg["stimulation"]["dc"]["enabled"]:
-        t_off_ms   = cfg["stimulation"]["dc"]["t_off_ms"]
+        t_off_ms   = cfg["stimulation"]["pattern"]["t_off_ms"]
     else:
         t_off_ms   = 0.0
 

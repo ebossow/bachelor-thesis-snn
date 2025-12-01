@@ -9,12 +9,11 @@ experiment:
     threads: 6
 
 network:
-  N_E: 80
-  N_IH: 10
-  N_IA_1: 5
-  N_IA_2: 5
-  N_IA: 10
-
+  N_E: 784
+  N_IH: 80
+  N_IA_1: 40
+  N_IA_2: 40
+  N_IA: 80
 neuron_model:
   name: "aeif_psc_exp"
   params:
@@ -32,9 +31,10 @@ neuron_model:
     #t_ref: 0
     tau_w: 1_000_000_000
     tau_minus: 50.0
+    gsl_error_tol: 0.000001
 
 synapses:
-  base_Wmax: 40
+  base_Wmax: 35
   base_LR: 0.001
   global_lr: 0.008
   E_to_X:
@@ -47,7 +47,7 @@ synapses:
       mu_plus: 0
       mu_minus: 0
     delay_ms: 0.5
-    Wmax_factor: 0 #8
+    Wmax_factor: 0 #56
     #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -110,15 +110,16 @@ stimulation:
     pixel_current_pA: 405.0
     image_path: "data/mnist/images.npy"
     label_path: "data/mnist/labels.npy"
+  
 
 neuron_excitability:
   enabled: true
   use_seed: true
   rng_seed: 1001
   mean_offset_pA: 0
-  std_pA: 1.5
+  std_pA: 1.0
   upper_offset_pA: 2.0
-  lower_offset_pA: -2.0
+  lower_offset_pA: -4.0
 
 noise:
   enabled: true
