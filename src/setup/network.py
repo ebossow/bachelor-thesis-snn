@@ -114,9 +114,12 @@ def connect_synapses(populations: Dict[str, Any],
         global_lr=global_lr
     )
 
+    _init_projection_weights(e_to_x["copy_model_name"],  base_Wmax * e_to_x["Wmax_factor"])
+    _init_projection_weights(ih_to_x["copy_model_name"], base_Wmax * ih_to_x["Wmax_factor"])
+    _init_projection_weights(ia_to_x["copy_model_name"], base_Wmax * ia_to_x["Wmax_factor"])
+
     synapse_cfg["weight_decay"]["decay_summand"] = synapse_cfg["E_to_X"]["synapse_parameter"]["lambda"] * 0.03
     #print("Decay Summand set to: ", synapse_cfg["weight_decay"]["decay_summand"])
-
 
 def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr) -> None:
     """
@@ -129,20 +132,38 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
     if cfg["copy_model_name"] == "stdp_ex_asym":
         #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["lambda"] = 0 * 2.347 * global_lr # max_change_rate_excitatory
+        synapse_parameter["lambda"] = 2.347 * global_lr # max_change_rate_excitatory
     elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
         #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["eta"] = 0 * -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
     elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
-        synapse_parameter["eta"] = 0 * synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
+        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}
     syn_spec = {
         "synapse_model": copy_name,
-        "weight": nest.random.normal(mean = 0, std = 0.2) * synapse_parameter["Wmax"],
+        #"weight": nest.random.normal(mean = 0, std = 0.2) * synapse_parameter["Wmax"],
         "delay": cfg["delay_ms"]
     }
     for target in targets:
         nest.Connect(src, target, conn_spec=conn_all, syn_spec=syn_spec)
+
     
+def _init_projection_weights(copy_name: str, Wmax: float, std_rel: float = 0.2) -> None:
+    conns = nest.GetConnections(synapse_model=copy_name)
+    n = len(conns)
+    if n == 0:
+        return
+
+    rng = np.random.default_rng()
+    samples = rng.normal(loc=0.0, scale=std_rel, size=n) * Wmax
+    print("Wmax:", Wmax)
+
+    if copy_name == "stdp_ex_asym":
+        w_min, w_max = 0.0, float(Wmax)
+    else:
+        w_min, w_max = float(Wmax), 0.0
+
+    weights = np.clip(samples, w_min, w_max)
+    conns.set({"weight": weights})

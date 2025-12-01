@@ -164,9 +164,11 @@ def cv_isi(
         if ts.size < min_spikes:
             continue
         isi = np.diff(ts)
+        #print(np.min(isi))
         if isi.size == 0:
             continue
         mu = isi.mean()
+        #print(mu)
         sigma = isi.std(ddof=0)
         if mu > 0:
             cv[j] = sigma / mu
@@ -282,44 +284,56 @@ def normalize_weight_matrix(
 ) -> np.ndarray:
     """
     Normalize weights to [-1,1] using per-projection Wmax from cfg.
-    Assumes population ordering: [E | IH | IA] both for pre and post.
+    Assumes population ordering: [E | IA_1 | IH | IA_2] (global GIDs).
+    Normierung erfolgt spaltenweise (nach Präsyn-Population).
     """
+    N_E     = cfg["network"]["N_E"]
+    N_IH    = cfg["network"]["N_IH"]
+    N_IA_1  = cfg["network"]["N_IA_1"]
+    N_IA_2  = cfg["network"]["N_IA_2"]
+    N_IA    = N_IA_1 + N_IA_2
 
-    N_E  = cfg["network"]["N_E"]
-    N_IH = cfg["network"]["N_IH"]
-    N_IA = cfg["network"]["N_IA"]
-    N_total = N_E + N_IH + N_IA
+    # globale Gesamtzahl
+    N_total = N_E + N_IA_1 + N_IH + N_IA_2
 
     if W.shape != (N_total, N_total):
-        raise ValueError("Weight matrix shape does not match network size")
+        raise ValueError(
+            f"Weight matrix shape {W.shape} does not match network size {N_total}."
+        )
 
     Wn = np.zeros_like(W, dtype=float)
 
-    # index ranges
-    E_slice  = slice(0, N_E)
-    IH_slice = slice(N_E, N_E + N_IH)
-    IA_slice = slice(N_E + N_IH, N_total)
+    # Indexbereiche im GID-Ordering: [E | IA_1 | IH | IA_2]
+    E_slice     = slice(0, N_E)
+    IA1_slice   = slice(N_E, N_E + N_IA_1)
+    IH_slice    = slice(N_E + N_IA_1, N_E + N_IA_1 + N_IH)
+    IA2_slice   = slice(N_E + N_IA_1 + N_IH, N_total)
 
-    syn_cfg = cfg["synapses"]
+    syn_cfg   = cfg["synapses"]
+    base_Wmax = float(syn_cfg["base_Wmax"])
 
-    # E -> all (E, IH, IA)
-    Wmax_exc = float(syn_cfg["E_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])
-    if Wmax_exc < 0:
-        raise ValueError("E_to_X Wmax must be >= 0")
-    Wn[:, E_slice] = W[:, E_slice] / Wmax_exc  # columns: presyn E
+    # E -> X (exzitatorisch)
+    Wmax_exc = float(syn_cfg["E_to_X"]["Wmax_factor"]) * base_Wmax
+    if Wmax_exc <= 0:
+        raise ValueError("E_to_X Wmax must be > 0 for excitatory normalization.")
+    Wn[:, E_slice] = W[:, E_slice] / Wmax_exc
 
-    # IH -> all
-    Wmax_ih = float(syn_cfg["IH_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])  # negative
+    # IH -> X (inhibitorisch, Hebb)
+    Wmax_ih = float(syn_cfg["IH_to_X"]["Wmax_factor"]) * base_Wmax  # < 0
+    if Wmax_ih >= 0:
+        raise ValueError("IH_to_X Wmax must be < 0 for inhibitory normalization.")
     Wn[:, IH_slice] = W[:, IH_slice] / abs(Wmax_ih)
 
-    # IA -> all
-    Wmax_ia = float(syn_cfg["IA_to_X"]["Wmax_factor"]) * float(syn_cfg["base_Wmax"])  # negative
-    Wn[:, IA_slice] = W[:, IA_slice] / abs(Wmax_ia)
+    # IA_1/IA_2 -> X (inhibitorisch, anti-Hebb), beide über IA_to_X konfiguriert
+    Wmax_ia = float(syn_cfg["IA_to_X"]["Wmax_factor"]) * base_Wmax  # < 0
+    if Wmax_ia >= 0:
+        raise ValueError("IA_to_X Wmax must be < 0 for inhibitory normalization.")
+    Wn[:, IA1_slice] = W[:, IA1_slice] / abs(Wmax_ia)
+    Wn[:, IA2_slice] = W[:, IA2_slice] / abs(Wmax_ia)
 
-    # clip to [-1,1] for safety
+    # Sicherheit: in [-1,1] clampen
     np.clip(Wn, -1.0, 1.0, out=Wn)
     return Wn
-
 
 def mean_weight_change(
     weight_times: npt.NDArray[np.floating],
