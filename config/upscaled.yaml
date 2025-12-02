@@ -10,10 +10,10 @@ experiment:
 
 network:
   N_E: 784
-  N_IH: 80
-  N_IA_1: 40
-  N_IA_2: 40
-  N_IA: 80
+  N_IH: 98
+  N_IA_1: 49
+  N_IA_2: 49
+  N_IA: 98
 neuron_model:
   name: "aeif_psc_exp"
   params:
@@ -47,7 +47,7 @@ synapses:
       mu_plus: 0
       mu_minus: 0
     delay_ms: 0.5
-    Wmax_factor: 12
+    Wmax_factor: 10
     #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -62,7 +62,7 @@ synapses:
       eta: 0.001
       alpha: 0.05
     delay_ms: 0.5
-    Wmax_factor: -16
+    Wmax_factor: -24
     #LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -117,9 +117,9 @@ neuron_excitability:
   use_seed: true
   rng_seed: 1001
   mean_offset_pA: 0
-  std_pA: 1.5
+  std_pA: 1.0
   upper_offset_pA: 2.0
-  lower_offset_pA: -2.0
+  lower_offset_pA: -4.0
 
 noise:
   enabled: true
