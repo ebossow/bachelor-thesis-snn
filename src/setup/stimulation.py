@@ -136,64 +136,69 @@ def _setup_mnist_stimulation(populations: Dict[str, Any],
     """
     MNIST-basierte Stimulation:
 
-    - Nimmt 2 Bilder (Paths in mnist_cfg["image_paths"]) mit shape (H,W),
-      H=W=image_size, Werte [0,255].
-    - Mapped die (image_size^2) Pixel auf die ersten N_pix E-Neuronen.
-    - Erzeugt pro E-Neuron einen step_current_generator mit:
-        Bild1-Puls, Gap, Bild2-Puls.
+    - E: 28x28-Pixel (784) -> erste N_E Excitatory-Neurone (1 Pixel / Neuron)
+    - IH+IA: downsampled 10x10-Pixel (100) -> erste 100 inhibitorische Neurone
+             (IH + IA zusammen). Beide nutzen dieselben Puls-/Pattern-Indizes.
     """
-    image_size = int(mnist_cfg["image_size"])
-    n_pixels = image_size * image_size
 
-    pixel_I_max = float(mnist_cfg["pixel_current_pA"])
+    image_size = int(mnist_cfg["image_size"])  # 28
+    n_pixels_E = image_size * image_size       # 784
 
-    if pattern_cfg.get("use_seed", False):
-        rng_seed = int(pattern_cfg.get("rng_seed", 0))
-    else:
-        rng_seed = None
+    pixel_I_max_E   = float(mnist_cfg["pixel_current_pA"])
+    pixel_I_max_inh = float(mnist_cfg.get("pixel_current_pA_inh",
+                                          pixel_I_max_E))  # optional separater Wert
 
+    # MNIST-Bilder und Labels laden
+    images_all = np.load(mnist_cfg["image_path"])   # (70000, 28, 28)
+    labels     = np.load(mnist_cfg["label_path"])   # (70000,)
 
-    # Bilder laden und zu Vektoren normieren
-    images = np.load(mnist_cfg["image_path"])   # (70000, 28, 28)
-    labels = np.load(mnist_cfg["label_path"])   # (70000,)
-
-    # Index eines '0'-Beispiels
     idx0 = np.where(labels == 0)[0][0]
-    # Index eines '1'-Beispiels
     idx1 = np.where(labels == 1)[0][0]
 
-    img_0 = images[idx0]   # (28, 28), '0'
-    img_1 = images[idx1]   # (28, 28), '1'
+    img0_28 = images_all[idx0].astype(float)  # (28, 28)
+    img1_28 = images_all[idx1].astype(float)  # (28, 28)
 
-    img_0 = img_0.reshape(-1) / 255.0  # in [0,1]
-    img_1 = img_1.reshape(-1) / 255.0  # in [0,1]
-    images = [img_0, img_1]
-    # images[k][j] = normierter Pixelwert des j-ten Pixels im k-ten Bild
-    print("Loaded MNIST images with shapes:", img_0.shape, img_1.shape)
+    # --- Bilder für E (28x28 -> 784, normiert 0..1) ---
+    img0_flat = img0_28.reshape(-1) / 255.0
+    img1_flat = img1_28.reshape(-1) / 255.0
+    images_E = [img0_flat, img1_flat]  # images_E[pattern_idx][j]
 
-    #fig, axes = plt.subplots(1, 2)
-    #axes[0].imshow(img_0.reshape(image_size, image_size), cmap="gray")
-    #axes[1].imshow(img_1.reshape(image_size, image_size), cmap="gray")
-    #plt.show()
+    # --- Bilder für Inhibitoren (28x28 -> 10x10 -> 100, normiert 0..1) ---
+    img0_10 = _downsample_mnist_img(img0_28) / 255.0  # (10, 10)
+    img1_10 = _downsample_mnist_img(img1_28) / 255.0  # (10, 10)
 
+    img0_10_flat = img0_10.reshape(-1)  # (100,)
+    img1_10_flat = img1_10.reshape(-1)  # (100,)
+    images_I = [img0_10_flat, img1_10_flat]  # images_I[pattern_idx][k]
+
+    print("MNIST E-images shape:", img0_flat.shape, img1_flat.shape)
+    print("MNIST I-images shape:", img0_10_flat.shape, img1_10_flat.shape)
 
     pop_E = populations["E"]
-    N_E = len(pop_E)
-    n_target = min(N_E, n_pixels)
+    pop_I = populations["IH"] + populations["IA"]
 
-    created = {"E": []}
+    N_E  = len(pop_E)
+    N_I  = len(pop_I)
+
+    n_target_E = min(N_E, n_pixels_E)
+    n_pixels_I = 10 * 10
+    n_target_I = min(N_I, n_pixels_I)
+
+    created = {"E": [], "I": []}
 
     if not pulses:
         return created
 
-    # Für jedes der n_target E-Neuronen einen SCG mit kompletter Zeitreihe
-    for j in range(n_target):
+    # -----------------------------
+    # 1) E-Population stimulieren
+    # -----------------------------
+    for j in range(n_target_E):
         amplitude_times: list[float] = []
         amplitude_values: list[float] = []
 
         for (t_start, t_end, pattern_idx) in pulses:
-            x = images[pattern_idx][j]  # Pixel in [0,1]
-            I = x * pixel_I_max
+            x = images_E[pattern_idx][j]  # in [0,1]
+            I = x * pixel_I_max_E
 
             amplitude_times.extend([t_start, t_end])
             amplitude_values.extend([I, 0.0])
@@ -210,6 +215,81 @@ def _setup_mnist_stimulation(populations: Dict[str, Any],
         )
         nest.Connect(scg, pop_E[j])
         created["E"].append(scg)
+
+    # -----------------------------
+    # 2) Inhibitoren (IH+IA) stimulieren: Hälfte A ↔ Bild0, Hälfte B ↔ Bild1
+    # -----------------------------
+    pop_I = populations["IH"] + populations["IA"]
+    N_I   = len(pop_I)
+
+    # halbiere Inhibitoren
+    half_I = N_I // 2
+    pop_I_A = pop_I[:half_I]      # Hälfte A (Soll-Bild: img0_10_flat)
+    pop_I_B = pop_I[half_I:]      # Hälfte B (Soll-Bild: img1_10_flat)
+
+    n_pixels_I = 10 * 10
+    n_target_A = min(len(pop_I_A), n_pixels_I)
+    n_target_B = min(len(pop_I_B), n_pixels_I)
+
+    # Hälfte A: kodiert Bild 0
+    for k in range(n_target_A):
+        amplitude_times: list[float] = []
+        amplitude_values: list[float] = []
+
+        for (t_start, t_end, pattern_idx) in pulses:
+            if pattern_idx == 0:
+                # IMG1 aktiv: Hälfte A bekommt Bild0
+                x_A = images_I[0][k]          # Pixel von Bild0 in [0,1]
+                I_A = x_A * pixel_I_max_inh
+            else:
+                # IMG2 aktiv: Hälfte A bekommt nichts
+                I_A = 0.0
+
+            amplitude_times.extend([t_start, t_end])
+            amplitude_values.extend([I_A, 0.0])
+
+        if not amplitude_times:
+            continue
+
+        scg = nest.Create(
+            "step_current_generator",
+            params={
+                "amplitude_times": amplitude_times,
+                "amplitude_values": amplitude_values,
+            },
+        )
+        nest.Connect(scg, pop_I_A[k])
+        created["I"].append(scg)
+
+    # Hälfte B: kodiert Bild 1
+    for k in range(n_target_B):
+        amplitude_times: list[float] = []
+        amplitude_values: list[float] = []
+
+        for (t_start, t_end, pattern_idx) in pulses:
+            if pattern_idx == 1:
+                # IMG2 aktiv: Hälfte B bekommt Bild1
+                x_B = images_I[1][k]          # Pixel von Bild1 in [0,1]
+                I_B = x_B * pixel_I_max_inh
+            else:
+                # IMG1 aktiv: Hälfte B bekommt nichts
+                I_B = 0.0
+
+            amplitude_times.extend([t_start, t_end])
+            amplitude_values.extend([I_B, 0.0])
+
+        if not amplitude_times:
+            continue
+
+        scg = nest.Create(
+            "step_current_generator",
+            params={
+                "amplitude_times": amplitude_times,
+                "amplitude_values": amplitude_values,
+            },
+        )
+        nest.Connect(scg, pop_I_B[k])
+        created["I"].append(scg)
 
     return created
 
@@ -258,3 +338,20 @@ def _build_random_pulses(pattern_cfg: Dict[str, Any]) -> list[tuple[float, float
         t += cycle_ms
 
     return pulses
+
+
+def _downsample_mnist_img(img_28: np.ndarray) -> np.ndarray:
+    """
+    Einfache 28x28 -> 10x10 Downsample-Funktion via Subsampling
+    (gleichmäßig verteilte Sample-Punkte).
+    img_28: shape (28, 28)
+    Rückgabe: shape (10, 10)
+    """
+    img_28 = np.asarray(img_28)
+    if img_28.shape != (28, 28):
+        raise ValueError(f"Expected (28, 28) image, got {img_28.shape}")
+
+    ys = np.linspace(0, 27, 10).astype(int)
+    xs = np.linspace(0, 27, 10).astype(int)
+    img_10 = img_28[np.ix_(ys, xs)]
+    return img_10
