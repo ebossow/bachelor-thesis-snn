@@ -46,8 +46,9 @@ synapses:
       alpha: 0.35
       mu_plus: 0
       mu_minus: 0
+    manual_lambda: 
     delay_ms: 0.5
-    Wmax_factor: 12
+    Wmax_factor: 10
     #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -61,8 +62,9 @@ synapses:
       tau: 35.0
       eta: 0.001
       alpha: 0.05
+    manual_eta:
     delay_ms: 0.5
-    Wmax_factor: -16
+    Wmax_factor: -18
     #LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -76,8 +78,9 @@ synapses:
       tau: 35.0
       eta: -0.001
       alpha: 0.05
+    manual_eta: 
     delay_ms: 0.5
-    Wmax_factor: -32
+    Wmax_factor: -40
     #LR_factor: -32.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -94,7 +97,7 @@ synapses:
 stimulation:
   dc:
     enabled: false
-    rnd_mean_pA: 405.0
+    rnd_mean_pA: 505.0
     rnd_std_pA: 20.0
   pattern:
     pulse_ms: 800.0

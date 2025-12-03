@@ -134,15 +134,30 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
     synapse_parameter = cfg["synapse_parameter"]
     synapse_parameter["Wmax"] = base_Wmax * cfg["Wmax_factor"]
     synapse_parameter["weight"] = synapse_parameter["Wmax"]
-    if cfg["copy_model_name"] == "stdp_ex_asym":
-        #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["lambda"] = 2.347 * global_lr # max_change_rate_excitatory
+
+    manual_lambda = cfg.get("manual_lambda", None)
+    manual_eta    = cfg.get("manual_eta", None)
+
+    if copy_name == "stdp_ex_asym":
+        if manual_lambda is not None:
+            synapse_parameter["lambda"] = float(manual_lambda)
+        else:
+            # Standardformel aus dem Paper
+            synapse_parameter["lambda"] = 2.347 * global_lr
+        # Decay-Summand immer aus tatsächlicher lambda
         cfg["decay_summand"] = synapse_parameter["lambda"] * 0.03
-    elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
-        #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
-        synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
-    elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
-        synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
+
+    elif copy_name == "stdp_inh_sym_hebb":
+        if manual_eta is not None:
+            synapse_parameter["eta"] = float(manual_eta)
+        else:
+            synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3)
+
+    elif copy_name == "stdp_inh_sym_antihebb":
+        if manual_eta is not None:
+            synapse_parameter["eta"] = float(manual_eta)
+        else:
+            synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3
 
     if long_run:
         if cfg["copy_model_name"] == "stdp_ex_asym":
@@ -169,7 +184,7 @@ def _init_projection_weights(copy_name: str, Wmax: float, std_rel: float = 0.2) 
 
     rng = np.random.default_rng()
     samples = rng.normal(loc=0.0, scale=std_rel, size=n) * Wmax
-    print("Wmax:", Wmax)
+    #print("Wmax:", Wmax)
 
     if copy_name == "stdp_ex_asym":
         w_min, w_max = 0.0, float(Wmax)
