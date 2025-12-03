@@ -19,6 +19,7 @@ def parse_args():
     p.add_argument("--eta_ih", type=float, default=None)
     p.add_argument("--eta_ia", type=float, default=None)
     p.add_argument("--global_lr", type=float, default=None)
+    p.add_argument("--long_run", type=bool, default=False)
     return p.parse_args()
 
 def main() -> None:
@@ -41,6 +42,10 @@ def main() -> None:
         syn_cfg["IA_to_X"]["synapse_parameter"]["eta"] = args.eta_ia
     if args.global_lr is not None:
         syn_cfg["global_lr"] = args.global_lr
+    if args.long_run:
+        syn_cfg["long_run"] = True
+    elif args.long_run == False:
+        syn_cfg["long_run"] = False
 
     # 2) Experiment ausführen
 

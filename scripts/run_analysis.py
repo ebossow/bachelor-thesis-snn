@@ -22,7 +22,6 @@ def parse_args():
     p.add_argument("--run_dir", type=str, default=None)
     p.add_argument(
         "--small_figure",
-        #action="store_true",
         help="If set, create separate figures: raster + weight matrix (no big summary).",
         type=bool,
         default=False

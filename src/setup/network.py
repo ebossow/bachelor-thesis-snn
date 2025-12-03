@@ -82,6 +82,7 @@ def connect_synapses(populations: Dict[str, Any],
     base_Wmax = synapse_cfg["base_Wmax"]
     base_LR = synapse_cfg["base_LR"]
     global_lr = synapse_cfg["global_lr"]
+    long_run = synapse_cfg.get("long_run", False)
 
     # Beispiel: E_to_X (E -> E, IH, IA)
     e_to_x = synapse_cfg["E_to_X"]
@@ -91,7 +92,8 @@ def connect_synapses(populations: Dict[str, Any],
         cfg=e_to_x,
         base_Wmax=base_Wmax,
         base_LR=base_LR,
-        global_lr=global_lr
+        global_lr=global_lr,
+        long_run=long_run
     )
 
     ih_to_x = synapse_cfg["IH_to_X"]
@@ -101,7 +103,8 @@ def connect_synapses(populations: Dict[str, Any],
         cfg=ih_to_x,
         base_Wmax=base_Wmax,
         base_LR=base_LR,
-        global_lr=global_lr
+        global_lr=global_lr,
+        long_run=long_run
     )
 
     ia_to_x = synapse_cfg["IA_to_X"]
@@ -111,7 +114,8 @@ def connect_synapses(populations: Dict[str, Any],
         cfg=ia_to_x,
         base_Wmax=base_Wmax,
         base_LR=base_LR,
-        global_lr=global_lr
+        global_lr=global_lr,
+        long_run=long_run
     )
 
     _init_projection_weights(e_to_x["copy_model_name"],  base_Wmax * e_to_x["Wmax_factor"])
@@ -121,7 +125,7 @@ def connect_synapses(populations: Dict[str, Any],
     synapse_cfg["weight_decay"]["decay_summand"] = synapse_cfg["E_to_X"]["synapse_parameter"]["lambda"] * 0.03
     #print("Decay Summand set to: ", synapse_cfg["weight_decay"]["decay_summand"])
 
-def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr) -> None:
+def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, global_lr, long_run) -> None:
     """
     Hilfsfunktion: eine Projektion mit init-Gewichten aufbauen.
     """
@@ -133,11 +137,18 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
     if cfg["copy_model_name"] == "stdp_ex_asym":
         #synapse_parameter["lambda"] = base_LR * cfg["LR_factor"]
         synapse_parameter["lambda"] = 2.347 * global_lr # max_change_rate_excitatory
+        cfg["decay_summand"] = synapse_parameter["lambda"] * 0.03
     elif cfg["copy_model_name"] == "stdp_inh_sym_hebb":
         #synapse_parameter["eta"] = base_LR * cfg["LR_factor"]
         synapse_parameter["eta"] = -1 * (synapse_parameter["Wmax"] * global_lr * 3) # max_change_rate_inhibitory * Wmax
     elif cfg["copy_model_name"] == "stdp_inh_sym_antihebb":
         synapse_parameter["eta"] = synapse_parameter["Wmax"] * global_lr * 3 # max_change_rate_inhibitory * Wmax
+
+    if long_run:
+        if cfg["copy_model_name"] == "stdp_ex_asym":
+            synapse_parameter["Wmax"] = 5000
+        else:
+            synapse_parameter["Wmax"] = -5000
 
     nest.CopyModel(model, copy_name, synapse_parameter)
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}

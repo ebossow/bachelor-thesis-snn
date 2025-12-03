@@ -39,9 +39,9 @@ def create_summary_figure(
     lr_E  = float(syn_cfg["E_to_X"]["synapse_parameter"]["lambda"])
     lr_IH = float(syn_cfg["IH_to_X"]["synapse_parameter"]["eta"])
     lr_IA = float(syn_cfg["IA_to_X"]["synapse_parameter"]["eta"])
-    Wmax_E  = int(syn_cfg["E_to_X"]["Wmax_factor"] * base_Wmax)
-    Wmax_IH = int(syn_cfg["IH_to_X"]["Wmax_factor"] * base_Wmax)
-    Wmax_IA = int(syn_cfg["IA_to_X"]["Wmax_factor"] * base_Wmax)
+    Wmax_E  = int(syn_cfg["E_to_X"]["synapse_parameter"]["Wmax"])
+    Wmax_IH = int(syn_cfg["IH_to_X"]["synapse_parameter"]["Wmax"])
+    Wmax_IA = int(syn_cfg["IA_to_X"]["synapse_parameter"]["Wmax"])
     N = cfg["network"]["N_E"] + cfg["network"]["N_IH"] + cfg["network"]["N_IA"]
 
     fig = plt.figure(figsize=(12, 10))
