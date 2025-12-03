@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 
 from src.analysis.summary_metrics import compute_summary_metrics
 from src.analysis.summary_figure import create_summary_figure
+from src.analysis.plotting_activity import plot_population_activity_interactive
+from src.analysis.plotting_spikes import plot_population_spikes_interactive
+
 
 from src.analysis.metrics import (
     build_weight_matrix,
@@ -26,6 +29,7 @@ def parse_args():
         type=bool,
         default=False
     )
+    p.add_argument("--animation", type=bool, default=False)
     return p.parse_args()
 
 
@@ -43,6 +47,9 @@ def main():
 
     cfg, data, weights_data, weights_over_time = load_run(run_dir)
     metrics = compute_summary_metrics(cfg, data, weights_over_time)
+    if args.animation:
+        #plot_population_activity_interactive(cfg, data, bin_size_ms=50.0) # animation with fire rates
+        plot_population_spikes_interactive(cfg, data, bin_size_ms=50.0) # animation with spikes
 
     net_cfg = cfg["network"]
     N_total = (
