@@ -9,6 +9,7 @@ from .metrics import (
     cv_isi,
     kuramoto_order_parameter,
     mean_weight_change,
+    branching_ratio_neuronwise,
 )
 from .util import combine_spikes  # falls du so eine helper-Funktion hast
 
@@ -93,6 +94,20 @@ def compute_summary_metrics(
         K_post = K[mask_K]
         if K_post.size > 0:
             mean_K = float(np.nanmean(K_post))
+
+    # --- Branching Ratio Sigma ---
+    sigma_spike, sigma_per_neuron = branching_ratio_neuronwise(
+        times=times_post,
+        senders=senders_post,
+        N_population=N,
+        dt_ms=2.0,             
+        delay_offset_ms=0.5,   
+        t_start_ms=t_off_ms,
+        t_stop_ms=simtime_ms,
+    )
+
+    print("Sigma Spike:", sigma_spike, " \n Sigma per neuron: ", sigma_per_neuron)
+
 
     return {
         "mean_rate_Hz": mean_rate,

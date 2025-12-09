@@ -398,3 +398,367 @@ def mean_weight_change(
     t_mid = 0.5 * (weight_times[:-1] + weight_times[1:])
 
     return t_mid, K
+
+def branching_ratio_neuronwise(
+    times: npt.NDArray[np.floating],
+    senders: npt.NDArray[np.int_],
+    N_population: int,
+    dt_ms: float,
+    delay_offset_ms: float = 0.5,
+    t_start_ms: float | None = None,
+    t_stop_ms: float | None = None,
+) -> Tuple[float, npt.NDArray[np.floating]]:
+    """
+    Neuron-spezifische Branching-Schätzung.
+
+    Für jeden Spike bei Zeit t_i (Sender g_i):
+      - Betrachte das Fenster [t_i + delay_offset_ms, t_i + delay_offset_ms + dt_ms).
+      - Zähle die Anzahl *verschiedener* Neuronen, die in diesem Fenster spiken.
+    Die globale Branching Ratio ist der Mittelwert der Kinderzahl pro Spike.
+
+    Parameters
+    ----------
+    times          : Spikezeiten in ms, shape (n_spikes,)
+    senders        : GIDs der spikenden Neuronen, shape (n_spikes,)
+    N_population   : Gesamtanzahl der betrachteten Neuronen
+    dt_ms          : Fensterbreite hinter jedem Spike (ms)
+    delay_offset_ms: Offset vom Spikezeitpunkt zum Start des Fensters (ms),
+                     z.B. ~ synaptische Verzögerung.
+    t_start_ms     : optional, nur Spikes mit t in [t_start_ms, t_stop_ms) als Eltern
+    t_stop_ms      : optional, s.o.
+
+    Returns
+    -------
+    sigma_global   : mittlere Kinderzahl pro Spike (Skalar),
+                     np.nan falls keine gültigen Eltern-Spikes
+    sigma_per_neuron : Array der Länge N_population,
+                       mittlere Kinderzahl pro Spike pro Neuron;
+                       np.nan, wenn Neuron keine Eltern-Spikes hatte.
+    """
+    times = np.asarray(times, float)
+    senders = np.asarray(senders, int)
+
+    if dt_ms <= 0.0:
+        raise ValueError("dt_ms must be > 0")
+
+    if times.size == 0:
+        return float("nan"), np.full(N_population, np.nan, dtype=float)
+
+    # optionales Zeitfenster für Eltern-Spikes
+    if t_start_ms is not None:
+        times_mask = times >= t_start_ms
+    else:
+        times_mask = np.ones_like(times, dtype=bool)
+    if t_stop_ms is not None:
+        times_mask &= (times < t_stop_ms)
+
+    # sortieren
+    order = np.argsort(times)
+    times_sorted = times[order]
+    senders_sorted = senders[order]
+
+    times_mask_sorted = times_mask[order]
+
+    # Mapping GID -> lokaler Index 0..N-1
+    sender_index = _build_sender_index(senders_sorted, N_population)
+
+    n_spikes = times_sorted.size
+    children_counts = np.zeros(n_spikes, dtype=float)
+
+    # Akkumulatoren pro Neuron
+    sum_children_per_neuron = np.zeros(N_population, dtype=float)
+    n_parent_spikes_per_neuron = np.zeros(N_population, dtype=float)
+
+    # Zwei Zeiger für das Slide-Fenster über times_sorted
+    j_start = 0
+    j_end = 0
+
+    for i in range(n_spikes):
+        t_i = times_sorted[i]
+        gid_i = senders_sorted[i]
+
+        # nur Spikes in gewünschtem Zeitfenster als Eltern zählen
+        if not times_mask_sorted[i]:
+            continue
+
+        # Fenstergrenzen
+        t_win_start = t_i + delay_offset_ms
+        t_win_end = t_win_start + dt_ms
+
+        # j_start: erster Spike mit time >= t_win_start
+        while j_start < n_spikes and times_sorted[j_start] < t_win_start:
+            j_start += 1
+
+        # j_end: erster Spike mit time >= t_win_end
+        if j_end < j_start:
+            j_end = j_start
+        while j_end < n_spikes and times_sorted[j_end] < t_win_end:
+            j_end += 1
+
+        # Slice der Kinder-Spikes (nur nach dem Eltern-Spike)
+        if j_start >= j_end:
+            n_children = 0.0
+        else:
+            # Sender im Fenster; mehrere Spikes desselben Neurons -> nur 1 Kind
+            child_senders = senders_sorted[j_start:j_end]
+            if child_senders.size == 0:
+                n_children = 0.0
+            else:
+                n_children = float(np.unique(child_senders).size)
+
+        children_counts[i] = n_children
+
+        # Beitrag zu Neuron-Statistik
+        j_local = sender_index.get(int(gid_i), None)
+        if j_local is not None and 0 <= j_local < N_population:
+            sum_children_per_neuron[j_local] += n_children
+            n_parent_spikes_per_neuron[j_local] += 1.0
+
+    # globale Branching Ratio: Mittelwert über alle Eltern-Spikes mit Fenster
+    valid_spikes = n_parent_spikes_per_neuron.sum() > 0
+    if np.any(children_counts > 0) or valid_spikes:
+        # Mittel über alle Eltern-Spikes, die im Zeitfenster liegen:
+        # times_mask_sorted markiert Eltern-Spikes, die wir berücksichtigen
+        parent_mask = times_mask_sorted
+        if np.any(parent_mask):
+            sigma_global = float(np.mean(children_counts[parent_mask]))
+        else:
+            sigma_global = float("nan")
+    else:
+        sigma_global = float("nan")
+
+    # sigma_j pro Neuron
+    sigma_per_neuron = np.full(N_population, np.nan, dtype=float)
+    nonzero = n_parent_spikes_per_neuron > 0
+    sigma_per_neuron[nonzero] = (
+        sum_children_per_neuron[nonzero] / n_parent_spikes_per_neuron[nonzero]
+    )
+
+    return sigma_global, sigma_per_neuron
+
+
+def empty_bin_fraction(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+) -> float:
+    """
+    Anteil leerer Zeitbins p0 für gegebenes dt_ms.
+
+    times_ms : Spikezeiten (ms, alle Neuronen)
+    t_start_ms, t_stop_ms : Auswertefenster
+    dt_ms : Binbreite
+
+    p0 = (#Bins mit 0 Events) / (Gesamtzahl Bins)
+    """
+    times = np.asarray(times_ms, float)
+    mask = (times >= t_start_ms) & (times < t_stop_ms)
+    times = times[mask]
+
+    if dt_ms <= 0.0 or t_stop_ms <= t_start_ms:
+        raise ValueError("Invalid dt_ms or time window")
+
+    n_bins = int(np.floor((t_stop_ms - t_start_ms) / dt_ms))
+    if n_bins <= 0:
+        return float("nan")
+
+    edges = t_start_ms + np.arange(n_bins + 1) * dt_ms
+    counts, _ = np.histogram(times, bins=edges)
+
+    if n_bins == 0:
+        return float("nan")
+    p0 = float(np.mean(counts == 0))
+    return p0
+
+
+def empty_bin_fraction_scan(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_list_ms: npt.NDArray[np.floating],
+) -> npt.NDArray[np.floating]:
+    """
+    p0(dt) für mehrere dt-Werte.
+
+    dt_list_ms : 1D-Array von dt-Werten (ms)
+    Returns: p0_array mit gleicher Länge.
+    """
+    dt_list = np.asarray(dt_list_ms, float)
+    p0_list = np.zeros_like(dt_list, dtype=float)
+
+    for i, dt in enumerate(dt_list):
+        p0_list[i] = empty_bin_fraction(times_ms, t_start_ms, t_stop_ms, dt)
+
+    return p0_list
+
+
+def binned_active_neurons(
+    times_ms: npt.NDArray[np.floating],
+    senders: npt.NDArray[np.int_],
+    N_population: int,
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """
+    Anzahl aktiver Neuronen pro Zeit-Bin.
+
+    "Aktiv" = mindestens ein Spike im Bin.
+
+    Returns
+    -------
+    N_t       : shape (n_bins,) – #aktive Neuronen pro Bin
+    t_centers : shape (n_bins,) – mittlere Zeitpunkte der Bins
+    """
+    times = np.asarray(times_ms, float)
+    senders = np.asarray(senders, int)
+
+    # Wir nutzen deine bestehende Binning-Logik aus instantaneous_rates.
+    rates, t_centers, _, _ = instantaneous_rates(
+        times,
+        senders,
+        N_population=N_population,
+        t_start=t_start_ms,
+        t_stop=t_stop_ms,
+        bin_size_ms=dt_ms,
+    )
+    # rates: (N_population, n_bins)
+    # aktiv, wenn rate > 0 ⇒ es gab mindestens einen Spike.
+    active = rates > 0.0
+    N_t = active.sum(axis=0).astype(float)  # (n_bins,)
+
+    return N_t, t_centers
+
+
+def average_inter_event_interval(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float | None = None,
+    t_stop_ms: float | None = None,
+) -> tuple[float, npt.NDArray[np.floating]]:
+    """
+    Globales Average Inter-Event Interval (AIEI) über alle Spikes.
+
+    times_ms : Spikezeiten in ms (alle Neuronen kombiniert).
+    t_start_ms, t_stop_ms : optionales Auswertefenster.
+
+    Returns
+    -------
+    aiei_ms : float (np.nan, falls <2 Spikes im Fenster)
+    isi_ms  : Array der einzelnen Inter-Event-Intervalle in ms
+    """
+    t = np.asarray(times_ms, float)
+    if t_start_ms is not None:
+        t = t[t >= t_start_ms]
+    if t_stop_ms is not None:
+        t = t[t < t_stop_ms]
+
+    t = np.sort(t)
+    if t.size < 2:
+        return float("nan"), np.array([], dtype=float)
+
+    isi = np.diff(t)  # ms
+    aiei = float(isi.mean()) if isi.size > 0 else float("nan")
+    return aiei, isi
+
+
+def avalanche_sizes_from_times(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+    min_size: int = 1,
+) -> Tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
+    """
+    Berechne Avalanche-Size- und -Dauer-Verteilung nach zeit-bin-basierter Definition.
+
+    Definition:
+      - Zeitfenster [t_start_ms, t_stop_ms) wird in Bins der Breite dt_ms eingeteilt.
+      - Ein Bin ist 'aktiv', wenn er mindestens einen Spike enthält.
+      - Eine Avalanche ist ein maximaler zusammenhängender Block aktiver Bins,
+        getrennt durch mindestens einen leeren Bin.
+      - Size S = Summe der Spike-Counts in den Bins dieser Avalanche.
+      - Duration D = (Anzahl Bins der Avalanche) * dt_ms.
+
+    Parameters
+    ----------
+    times_ms : array-like
+        Spikezeiten in ms (alle Neuronen kombiniert).
+    t_start_ms : float
+        Startzeit des Auswertefensters in ms (inklusive).
+    t_stop_ms : float
+        Endzeit des Auswertefensters in ms (exklusiv).
+    dt_ms : float
+        Binbreite in ms.
+    min_size : int
+        Nur Avalanches mit S >= min_size werden zurückgegeben.
+
+    Returns
+    -------
+    sizes : (n_avalanches,) array
+        Avalanche-Größen (Anzahl Spikes).
+    durations_ms : (n_avalanches,) array
+        Avalanche-Dauern in ms.
+    """
+    t = np.asarray(times_ms, float)
+
+    # Auf das Fenster beschränken
+    mask = (t >= t_start_ms) & (t < t_stop_ms)
+    t = t[mask]
+
+    if t.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    if dt_ms <= 0.0:
+        raise ValueError("dt_ms must be > 0.")
+
+    # Bins
+    total_T = t_stop_ms - t_start_ms
+    n_bins = int(np.floor(total_T / dt_ms))
+    if n_bins <= 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    edges = t_start_ms + np.arange(n_bins + 1) * dt_ms
+
+    # Spike-Counts pro Bin
+    counts, _ = np.histogram(t, bins=edges)
+    counts = counts.astype(int)  # shape (n_bins,)
+
+    active = counts > 0
+
+    sizes: list[float] = []
+    durations: list[float] = []
+
+    in_avalanche = False
+    start_bin = 0
+
+    for n in range(n_bins):
+        if active[n]:
+            if not in_avalanche:
+                # Start einer neuen Avalanche
+                in_avalanche = True
+                start_bin = n
+        else:
+            if in_avalanche:
+                # Ende der Avalanche bei n-1
+                end_bin = n - 1
+                s = counts[start_bin : end_bin + 1].sum()
+                if s >= min_size:
+                    sizes.append(float(s))
+                    dur_ms = (end_bin - start_bin + 1) * dt_ms
+                    durations.append(float(dur_ms))
+                in_avalanche = False
+
+    # Falls Avalanche bis zum letzten Bin läuft
+    if in_avalanche:
+        end_bin = n_bins - 1
+        s = counts[start_bin : end_bin + 1].sum()
+        if s >= min_size:
+            sizes.append(float(s))
+            dur_ms = (end_bin - start_bin + 1) * dt_ms
+            durations.append(float(dur_ms))
+
+    if not sizes:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    return np.asarray(sizes, float), np.asarray(durations, float)
