@@ -119,6 +119,13 @@ def plot_pdf_mean_rate_ax(ax: plt.Axes, mean_rates: np.ndarray, bins: int = 50) 
         title="Distribution of mean firing rates",
         bins=bins,
     )
+    values = np.asarray(mean_rates, float)
+    values = values[np.isfinite(values)]  # NaNs rausfiltern
+    mu = float(values.mean())
+    print(f"Mean firing rate over neurons: {mu:.3f} Hz")
+    # vertikale Linie für den Mittelwert
+    ax.axvline(mu, color="red", linestyle="--", label=f"mean = {mu:.2f} Hz")
+    ax.legend()
 
 
 # Wrapper, falls du sie weiterhin einzeln aufrufen willst:

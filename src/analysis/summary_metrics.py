@@ -57,6 +57,9 @@ def compute_summary_metrics(
         t_stop=simtime_ms,
         bin_size_ms=50.0,
     )
+
+    #print("Average population firing rate: ", mean_rate_pop, " Hz")
+
     # „mean firing rate (mean)“
     mean_rate = float(mean_rates_per_neuron.mean())
 
@@ -95,7 +98,7 @@ def compute_summary_metrics(
         if K_post.size > 0:
             mean_K = float(np.nanmean(K_post))
 
-    # --- Branching Ratio Sigma ---
+    """ # --- Branching Ratio Sigma ---
     sigma_spike, sigma_per_neuron = branching_ratio_neuronwise(
         times=times_post,
         senders=senders_post,
@@ -106,7 +109,7 @@ def compute_summary_metrics(
         t_stop_ms=simtime_ms,
     )
 
-    print("Sigma Spike:", sigma_spike, " \n Sigma per neuron: ", sigma_per_neuron)
+    print("Sigma Spike:", sigma_spike, " \n Sigma per neuron: ", sigma_per_neuron) """
 
 
     return {

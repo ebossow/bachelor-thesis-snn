@@ -2,7 +2,7 @@
 
 experiment:
   name: "base_experiment"
-  simtime_ms: 10000
+  simtime_ms: 20000
   seed: 12345
   nest:
     resolution_ms: 1
@@ -46,6 +46,7 @@ synapses:
       alpha: 0.35
       mu_plus: 0
       mu_minus: 0
+    manual_lambda: 
     delay_ms: 0.5
     Wmax_factor: 0 #8
     #LR_factor: 1.0

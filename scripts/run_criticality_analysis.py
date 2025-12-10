@@ -10,6 +10,8 @@ from src.analysis.metrics import (
     empty_bin_fraction_scan,
     branching_ratio_neuronwise,
     avalanche_sizes_from_times,
+    instantaneous_rates,
+    branching_ratios_binned_global,
 )
 
 
@@ -58,7 +60,10 @@ def main():
     cfg, data, weights_data, weights_over_time = load_run(run_dir)
 
     simtime_ms = float(cfg["experiment"]["simtime_ms"])
-    t_off_ms = float(cfg["stimulation"]["pattern"].get("t_off_ms", simtime_ms))
+    if cfg["stimulation"]["dc"]["enabled"]:
+        t_off_ms = float(cfg["stimulation"]["pattern"].get("t_off_ms", simtime_ms))
+    else:
+        t_off_ms = 0.0
     t_start_ms = float(args.t_start_ms) if args.t_start_ms is not None else t_off_ms
     t_stop_ms = float(args.t_stop_ms) if args.t_stop_ms is not None else simtime_ms
     dt_sigma = float(args.dt_ms)
@@ -82,6 +87,26 @@ def main():
         + net_cfg.get("N_IA_2", 0)
     )
 
+    rates, t_bins, mean_rate_pop, mean_rates_per_neuron = instantaneous_rates(
+        times=times,          # bereits auf t_start_ms..t_stop_ms gefiltert
+        senders=senders,
+        N_population=N_total,
+        t_start=t_start_ms,
+        t_stop=t_stop_ms,
+        bin_size_ms=50.0,
+    )
+    print("mean_rate_population (Hz):", mean_rate_pop)
+
+    def suggested_dt_ms(x: float, N: int, mean_rate_hz: float = 1.45, dt_min_ms: float = 2.0) -> float:
+        if mean_rate_hz <= 0:
+            return dt_min_ms
+        dt = x * 1000.0 / (N * mean_rate_hz)
+        return max(dt_min_ms, dt)
+
+    for x in [0.5, 1.0, 2.0]:
+        dt = suggested_dt_ms(x, N_total, mean_rate_pop, dt_min_ms=2.0)
+        print(f"x={x}: dt ≈ {dt:.2f} ms")
+
     print("\n=== Criticality analysis ===")
     print(f"Run dir    : {run_dir}")
     print(f"Time window: [{t_start_ms} ms, {t_stop_ms} ms]")
@@ -101,7 +126,7 @@ def main():
     # ------------------------------------------------------------------
     # 2) p0(dt) Scan (optional)
     # ------------------------------------------------------------------
-    dt_list = np.array([2.0, 3.0, 7.0, 8.0, 9.0, 10.0, 15.0, 16.0, 17.0, 18.0])
+    dt_list = np.array([2.0, 3.0, 7.0, 8.0, 9.0, 10.0])
     p0_list = empty_bin_fraction_scan(
         times_ms=times,
         t_start_ms=t_start_ms,
@@ -113,7 +138,7 @@ def main():
         print(f"dt = {dt:4.1f} ms -> p0 = {p0:6.3f}")
 
     # ------------------------------------------------------------------
-    # 3) σ(dt) neuronweise
+    # 3) σ(dt) neuronweise + global + avalanche wise
     # ------------------------------------------------------------------
     sigma_global, sigma_per_neuron = branching_ratio_neuronwise(
         times=times,
@@ -135,6 +160,21 @@ def main():
     print(f"\nNeuron-wise branching σ_j(dt={dt_sigma:.1f} ms):")
     print(f"  mean σ = {sigma_mean:.3f}")
     print(f"  #neurons with valid σ_j: {np.isfinite(sigma_j).sum()} / {sigma_j.size}")
+
+    # --- Globale und Avalanch Branching Ratio ---
+
+    sigma_binned, sigma_binned_aval, counts = branching_ratios_binned_global(
+        times_ms=times,
+        t_start_ms=t_start_ms,
+        t_stop_ms=t_stop_ms,
+        dt_ms=dt_sigma,
+        min_aval_len=2,
+    )
+
+    print(f"\nBinned/global branching (dt={dt_sigma:.1f} ms):")
+    print(f"  σ_global_counts      = {sigma_binned:.3f}")
+    print(f"  σ_from_avalanches    = {sigma_binned_aval:.3f}")
+    print(f"  #bins with spikes    = {(counts > 0).sum()} / {counts.size}")
 
     # ------------------------------------------------------------------
     # 4) Einfache Plots: ISI-Histogramm und Verteilung von σ_j
@@ -197,6 +237,7 @@ def main():
         plt.show()
     else:
         print("No avalanches in this window (with given dt).")
+
 
 
 if __name__ == "__main__":

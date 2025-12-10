@@ -99,6 +99,8 @@ def instantaneous_rates(
     spike_counts_per_neuron = counts.sum(axis=1)          # shape (N,)
     mean_rates_per_neuron = spike_counts_per_neuron / total_time_s  # Hz
 
+    #print("len spikes: ", times.size, " total time (s): ", total_time_s, " N_population: ", N_population, "mean_pop_rate: ", times.size / (total_time_s * N_population))
+
     # globaler Mittelwert über alle Neuronen
     mean_rate_population = mean_rates_per_neuron.mean()
 
@@ -314,19 +316,19 @@ def normalize_weight_matrix(
 
     # E -> X (exzitatorisch)
     Wmax_exc = float(syn_cfg["E_to_X"]["Wmax_factor"]) * base_Wmax
-    if Wmax_exc <= 0:
+    if Wmax_exc < 0.0:
         raise ValueError("E_to_X Wmax must be > 0 for excitatory normalization.")
     Wn[:, E_slice] = W[:, E_slice] / Wmax_exc
 
     # IH -> X (inhibitorisch, Hebb)
     Wmax_ih = float(syn_cfg["IH_to_X"]["Wmax_factor"]) * base_Wmax  # < 0
-    if Wmax_ih >= 0:
+    if Wmax_ih > 0:
         raise ValueError("IH_to_X Wmax must be < 0 for inhibitory normalization.")
     Wn[:, IH_slice] = W[:, IH_slice] / abs(Wmax_ih)
 
     # IA_1/IA_2 -> X (inhibitorisch, anti-Hebb), beide über IA_to_X konfiguriert
     Wmax_ia = float(syn_cfg["IA_to_X"]["Wmax_factor"]) * base_Wmax  # < 0
-    if Wmax_ia >= 0:
+    if Wmax_ia > 0:
         raise ValueError("IA_to_X Wmax must be < 0 for inhibitory normalization.")
     Wn[:, IA1_slice] = W[:, IA1_slice] / abs(Wmax_ia)
     Wn[:, IA2_slice] = W[:, IA2_slice] / abs(Wmax_ia)
@@ -762,3 +764,165 @@ def avalanche_sizes_from_times(
         return np.array([], dtype=float), np.array([], dtype=float)
 
     return np.asarray(sizes, float), np.asarray(durations, float)
+
+### ----- Branching Ratio Varianten -----
+
+def binned_spike_counts(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+) -> tuple[npt.NDArray[np.int_], npt.NDArray[np.floating]]:
+    """
+    Gesamt-Spikecounts pro Zeitfenster (alle Neuronen zusammen).
+
+    times_ms  : Spikezeiten (ms, alle Neuronen kombiniert)
+    t_start_ms, t_stop_ms : Auswertefenster [t_start, t_stop)
+    dt_ms     : Binbreite
+
+    Returns
+    -------
+    counts    : (n_bins,) int – #Spikes pro Bin
+    edges_ms  : (n_bins+1,) float – Bin-Grenzen in ms
+    """
+    t = np.asarray(times_ms, float)
+    if dt_ms <= 0.0 or t_stop_ms <= t_start_ms:
+        raise ValueError("Invalid dt_ms or time window")
+
+    mask = (t >= t_start_ms) & (t < t_stop_ms)
+    t = t[mask]
+
+    total_T = t_stop_ms - t_start_ms
+    n_bins = int(np.floor(total_T / dt_ms))
+    if n_bins <= 0:
+        return np.zeros(0, dtype=int), np.array([t_start_ms, t_stop_ms], dtype=float)
+
+    edges = t_start_ms + np.arange(n_bins + 1) * dt_ms
+    counts, _ = np.histogram(t, bins=edges)
+    counts = counts.astype(int)
+    return counts, edges
+
+
+def branching_ratio_from_counts(
+    spike_counts: npt.NDArray[np.int_],
+) -> float:
+    """
+    Globale Branching-Ratio aus Bin-Counts.
+
+    spike_counts : (n_bins,) – #Spikes pro Zeitfenster
+
+    σ = sum( N_{t+1} ) / sum( N_t ) über alle Bins mit N_t > 0
+    (entspricht deinem „simplen“ Ansatz / estimate_branching_ratio).
+    """
+    counts = np.asarray(spike_counts, float)
+    if counts.size < 2:
+        return float("nan")
+
+    parents = counts[:-1]
+    children = counts[1:]
+
+    mask = parents > 0.0
+    if not np.any(mask):
+        return float("nan")
+
+    parents = parents[mask]
+    children = children[mask]
+
+    denom = parents.sum()
+    if denom <= 0.0:
+        return float("nan")
+
+    sigma = float(children.sum() / denom)
+    return sigma
+
+def avalanche_segments_from_counts(
+    spike_counts: npt.NDArray[np.int_],
+    min_len: int = 2,
+) -> list[npt.NDArray[np.int_]]:
+    """
+    Zerlegt die Bin-Counts in Avalanche-Segmente (zusammenhängende aktive Blöcke).
+
+    spike_counts : (n_bins,) – #Spikes pro Bin
+    min_len      : minimale Anzahl Bins für eine Avalanche
+
+    Returns
+    -------
+    avalanches : Liste von 1D-Arrays (Counts pro Bin innerhalb einer Avalanche)
+    """
+    counts = np.asarray(spike_counts, int)
+    if counts.size == 0:
+        return []
+
+    padded = np.concatenate(([0], counts, [0]))
+    zero_idx = np.where(padded == 0)[0]
+
+    avalanches: list[npt.NDArray[np.int_]] = []
+    for i in range(len(zero_idx) - 1):
+        lower = zero_idx[i]
+        upper = zero_idx[i + 1]
+        if upper - lower <= 1:
+            continue
+        seg = padded[lower + 1 : upper]
+        if seg.size >= min_len:
+            avalanches.append(seg)
+
+    return avalanches
+
+def branching_ratio_from_avalanches(
+    spike_counts: npt.NDArray[np.int_],
+    min_len: int = 2,
+) -> float:
+    """
+    Branching-Ratio aus einzelnen Avalanches.
+
+    Idee:
+      - Zerlege die Zeitserie der Bin-Counts in Avalanches.
+      - Berechne pro Avalanche die einfache Branching-Ratio
+        (wie in branching_ratio_from_counts).
+      - Gib den Mittelwert über alle Avalanches zurück.
+
+    Returns
+    -------
+    sigma_aval : float (np.nan, falls keine gültigen Avalanches)
+    """
+    avalanches = avalanche_segments_from_counts(spike_counts, min_len=min_len)
+    if not avalanches:
+        return float("nan")
+
+    sigmas: list[float] = []
+    print(f"# Avalanches: {len(avalanches)}")
+    for seg in avalanches:
+        sigma_seg = branching_ratio_from_counts(seg)
+        if np.isfinite(sigma_seg):
+            sigmas.append(sigma_seg)
+
+    if not sigmas:
+        return float("nan")
+
+    return float(np.mean(sigmas))
+
+def branching_ratios_binned_global(
+    times_ms: npt.NDArray[np.floating],
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+    min_aval_len: int = 2,
+) -> tuple[float, float, npt.NDArray[np.int_]]:
+    """
+    Komfortfunktion:
+
+      - binnt times_ms in Bins der Breite dt_ms
+      - berechnet
+          σ_global = branching_ratio_from_counts(counts)
+          σ_aval   = branching_ratio_from_avalanches(counts)
+
+    Returns
+    -------
+    sigma_global : float
+    sigma_aval   : float
+    counts       : (n_bins,) int – verwendete Spike-Counts
+    """
+    counts, _ = binned_spike_counts(times_ms, t_start_ms, t_stop_ms, dt_ms)
+    sigma_global = branching_ratio_from_counts(counts)
+    sigma_aval   = branching_ratio_from_avalanches(counts, min_len=min_aval_len)
+    return sigma_global, sigma_aval, counts
