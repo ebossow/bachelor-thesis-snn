@@ -107,7 +107,10 @@ def main():
     # t_off_ms, falls vorhanden (z.B. Stimulus-Off); sonst 0
     stim_cfg = cfg.get("stimulation", {})
     pattern_cfg = stim_cfg.get("pattern", {})
-    t_off_ms = float(pattern_cfg.get("t_off_ms", 0.0))
+    if stim_cfg["dc"]["enabled"]:
+        t_off_ms = float(pattern_cfg.get("t_off_ms", 0.0))
+    else:
+        t_off_ms = 0.0
 
     t_start_ms = float(args.t_start_ms) if args.t_start_ms is not None else t_off_ms
     t_stop_ms = float(args.t_stop_ms) if args.t_stop_ms is not None else simtime_ms

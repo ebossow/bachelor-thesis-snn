@@ -812,7 +812,6 @@ def branching_ratio_from_counts(
     spike_counts : (n_bins,) – #Spikes pro Zeitfenster
 
     σ = sum( N_{t+1} ) / sum( N_t ) über alle Bins mit N_t > 0
-    (entspricht deinem „simplen“ Ansatz / estimate_branching_ratio).
     """
     counts = np.asarray(spike_counts, float)
     if counts.size < 2:
@@ -885,7 +884,11 @@ def branching_ratio_from_avalanches(
     -------
     sigma_aval : float (np.nan, falls keine gültigen Avalanches)
     """
+    print("spike counts", spike_counts)
+    print("spike_counts_len: ", len(spike_counts))
+    print("max_spike_count: ", np.max(spike_counts))
     avalanches = avalanche_segments_from_counts(spike_counts, min_len=min_len)
+    print("avalanches: ", avalanches)   
     if not avalanches:
         return float("nan")
 
