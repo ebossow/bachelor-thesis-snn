@@ -61,6 +61,19 @@ def main():
     # Decay aus
     syn_cfg["weight_decay"]["enabled"] = False
 
+    def _rescale_wmax(projection_key: str, scale: float) -> None:
+        if scale == 1.0:
+            return
+        proj_cfg = syn_cfg[projection_key]
+        proj_cfg["Wmax_factor"] *= scale
+        proj_cfg["synapse_parameter"]["Wmax"] = (
+            syn_cfg["base_Wmax"] * proj_cfg["Wmax_factor"]
+        )
+
+    _rescale_wmax("E_to_X", args.scale_E)
+    _rescale_wmax("IH_to_X", args.scale_IH)
+    _rescale_wmax("IA_to_X", args.scale_IA)
+
     # 3) NEST reset + Netzwerk aufbauen
     nest.ResetKernel()
 
