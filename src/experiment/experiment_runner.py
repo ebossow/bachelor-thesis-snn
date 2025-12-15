@@ -34,6 +34,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
         populations=pops,
         synapse_cfg=cfg["synapses"],
         record_weight_trajectory=True,  # für K(t)
+        snapshot_times_ms=[40000.0],
     )
 
     #run_root = Path("results")

@@ -28,6 +28,7 @@ def run_simulation(
     populations: Dict[str, Any],
     synapse_cfg: Dict[str, Any],
     record_weight_trajectory: bool = False,
+    snapshot_times_ms: list[float] | None = None,
 ) -> Dict[str, Any]:
     """
     NEST-Simulation in Chunks ausführen und Rohdaten + optional Gewichtstrajektorie holen.
@@ -59,6 +60,15 @@ def run_simulation(
     conn_IH = nest.GetConnections(source=IH, synapse_model=model_IH)
     conn_IA = nest.GetConnections(source=IA, synapse_model=model_IA)
 
+    all_neurons = E + IH + IA
+    conns = nest.GetConnections(all_neurons, all_neurons)
+    w_now = np.array(conns.get("weight"), float)
+    print("In run_simulation:",
+        "mean =", w_now.mean(),
+        "std =", w_now.std(),
+        "min =", w_now.min(),
+        "max =", w_now.max())
+
     # Wmax-Werte aus Config (beachte: inh negativ)
     base_Wmax = float(synapse_cfg["base_Wmax"])
     Wmax_exc      = float(synapse_cfg["E_to_X"]["Wmax_factor"])  * base_Wmax
@@ -68,13 +78,25 @@ def run_simulation(
     # Gewichtstrajektorie (optional)
     weight_times: list[float] = []
     weight_snapshots: list[np.ndarray] = []
+    weight_sources: np.ndarray | None = None
+    weight_targets: np.ndarray | None = None
 
     def _snapshot_weights(current_time_ms: float) -> None:
+        nonlocal weight_sources, weight_targets
         if not record_weight_trajectory:
             return
         wE  = np.array(conn_E.get("weight"),  dtype=float)
         wIH = np.array(conn_IH.get("weight"), dtype=float)
         wIA = np.array(conn_IA.get("weight"), dtype=float)
+        if weight_sources is None or weight_targets is None:
+            src_E = np.array(conn_E.get("source"), dtype=int)
+            tgt_E = np.array(conn_E.get("target"), dtype=int)
+            src_IH = np.array(conn_IH.get("source"), dtype=int)
+            tgt_IH = np.array(conn_IH.get("target"), dtype=int)
+            src_IA = np.array(conn_IA.get("source"), dtype=int)
+            tgt_IA = np.array(conn_IA.get("target"), dtype=int)
+            weight_sources = np.concatenate([src_E, src_IH, src_IA])
+            weight_targets = np.concatenate([tgt_E, tgt_IH, tgt_IA])
         w_all = np.concatenate([wE, wIH, wIA])
         weight_times.append(current_time_ms)
         weight_snapshots.append(w_all)
@@ -113,10 +135,25 @@ def run_simulation(
             _snapshot_weights(current_time)
 
     else:
-        # kein Decay: eine einzige Simulate
-        nest.Simulate(simtime_ms)
-        current_time = simtime_ms
-        _snapshot_weights(current_time)
+        if record_weight_trajectory and snapshot_times_ms:
+            snapshot_times = sorted(t for t in snapshot_times_ms
+                                    if 0.0 < t <= simtime_ms)
+            current_time = 0.0
+            for t_snap in snapshot_times:
+                dt = t_snap - current_time
+                if dt > 0:
+                    nest.Simulate(dt)
+                    current_time = t_snap
+                    _snapshot_weights(current_time)
+            if current_time < simtime_ms:
+                nest.Simulate(simtime_ms - current_time)
+                current_time = simtime_ms
+                _snapshot_weights(current_time)
+        else:
+            # kein Decay: eine einzige Simulation
+            nest.Simulate(simtime_ms)
+            current_time = simtime_ms
+            _snapshot_weights(current_time)
 
     # Eventdaten einsammeln (wie bisher)
     data: Dict[str, Any] = {}
@@ -130,10 +167,14 @@ def run_simulation(
 
     # Gewichtstrajektorie anhängen, falls aufgezeichnet
     if record_weight_trajectory and weight_snapshots:
-        data["weights_trajectory"] = {
-            "times": np.array(weight_times, dtype=float),                # (n_snap,)
-            "weights": np.stack(weight_snapshots, axis=0).astype(float)  # (n_snap, M)
+        traj: Dict[str, Any] = {
+            "times": np.array(weight_times, dtype=float),
+            "weights": np.stack(weight_snapshots, axis=0).astype(float)
         }
+        if weight_sources is not None and weight_targets is not None:
+            traj["sources"] = weight_sources.astype(int)
+            traj["targets"] = weight_targets.astype(int)
+        data["weights_trajectory"] = traj
 
     sim_end = time.time()
     print(f"Simulation completed in {sim_end - sim_start:.2f} seconds.")

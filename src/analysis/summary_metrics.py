@@ -97,6 +97,8 @@ def compute_summary_metrics(
         K_post = K[mask_K]
         if K_post.size > 0:
             mean_K = float(np.nanmean(K_post))
+    else:
+        K_post = np.array([])
 
     """ # --- Branching Ratio Sigma ---
     sigma_spike, sigma_per_neuron = branching_ratio_neuronwise(

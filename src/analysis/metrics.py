@@ -893,7 +893,7 @@ def branching_ratio_from_avalanches(
         return float("nan")
 
     sigmas: list[float] = []
-    print(f"# Avalanches: {len(avalanches)}")
+    #print(f"# Avalanches: {len(avalanches)}")
     for seg in avalanches:
         sigma_seg = branching_ratio_from_counts(seg)
         if np.isfinite(sigma_seg):

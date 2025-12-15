@@ -57,9 +57,13 @@ def save_run(cfg: Dict[str, Any],
     # Gewichtstrajektorie (optional)
     wtraj = data.get("weights_trajectory", None)
     if wtraj is not None:
-        np.savez_compressed(
-            run_dir / "weights_trajectory.npz",
-            times=wtraj["times"],
-            weights=wtraj["weights"],
-        )
+        payload: Dict[str, Any] = {
+            "times": wtraj["times"],
+            "weights": wtraj["weights"],
+        }
+        if "sources" in wtraj:
+            payload["sources"] = wtraj["sources"]
+        if "targets" in wtraj:
+            payload["targets"] = wtraj["targets"]
+        np.savez_compressed(run_dir / "weights_trajectory.npz", **payload)
     

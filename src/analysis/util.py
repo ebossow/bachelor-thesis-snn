@@ -55,6 +55,10 @@ def load_run(run_dir: Path):
             "times": d["times"],
             "weights": d["weights"],  # shape (n_snap, M)
         }
+        if "sources" in d.files:
+            weights_over_time["sources"] = d["sources"]
+        if "targets" in d.files:
+            weights_over_time["targets"] = d["targets"]
 
     return cfg, data, weights_data, weights_over_time
 
