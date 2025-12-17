@@ -1,8 +1,8 @@
 # Common defaults for all experiments
 
 experiment:
-  name: "base_experiment_short_no_plasticity"
-  simtime_ms: 20000
+  name: "base_experiment_IA_only"
+  simtime_ms: 60000
   seed: 12345
   nest:
     resolution_ms: 1
@@ -10,10 +10,10 @@ experiment:
 
 network:
   N_E: 80
-  N_IH: 10
-  N_IA_1: 5
-  N_IA_2: 5
-  N_IA: 10
+  N_IH: 0
+  N_IA_1: 10
+  N_IA_2: 10
+  N_IA: 20
 
 neuron_model:
   name: "aeif_psc_exp"
@@ -48,7 +48,7 @@ synapses:
       mu_minus: 0
     manual_lambda: 
     delay_ms: 0.5
-    Wmax_factor: 0 #8
+    Wmax_factor: 8 #8
     #LR_factor: 1.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -63,7 +63,7 @@ synapses:
       eta: 0.001
       alpha: 0.05
     delay_ms: 0.5
-    Wmax_factor: 0 #-16
+    Wmax_factor: -16 #-16
     #LR_factor: 16.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -78,7 +78,7 @@ synapses:
       eta: -0.001
       alpha: 0.05
     delay_ms: 0.5
-    Wmax_factor: 0 #-32
+    Wmax_factor: -32 #-32
     #LR_factor: -32.0
     weight_init: 
       distribution: "trunc_normal_rel_to_Wmax"
@@ -94,7 +94,7 @@ synapses:
 
 stimulation:
   dc:
-    enabled: false
+    enabled: true
     rnd_mean_pA: 405.0
     rnd_std_pA: 20.0
   pattern:

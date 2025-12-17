@@ -11,6 +11,13 @@ def _truncated_normal_upper(rng: np.random.Generator, mean: float, std: float, u
     clipped_samples = np.maximum(clipped_samples, lower)
     return clipped_samples
 
+
+def _create_population(model_name: str, count: int, neuron_params: Dict[str, Any]) -> nest.NodeCollection:
+    """Create a NodeCollection, returning empty collection if count is zero."""
+    if count <= 0:
+        return nest.NodeCollection([])
+    return nest.Create(model_name, count, params=neuron_params)
+
 def build_populations(network_cfg: Dict[str, Any],
                       noise_cfg: Dict[str, Any],
                       neuron_model_cfg: Dict[str, Any],
@@ -30,11 +37,12 @@ def build_populations(network_cfg: Dict[str, Any],
     neuron_params = neuron_model_cfg["params"]
     #print("Model Name: ", model_name, " Params: ", neuron_params)
 
-    E = nest.Create(model_name, N_E, params=neuron_params)
-    IA_1 = nest.Create(model_name, N_IA_1, params=neuron_params)
-    IH = nest.Create(model_name, N_IH, params=neuron_params)
-    IA_2 = nest.Create(model_name, N_IA_2, params=neuron_params)
+    E = _create_population(model_name, N_E, neuron_params)
+    IA_1 = _create_population(model_name, N_IA_1, neuron_params)
+    IH = _create_population(model_name, N_IH, neuron_params)
+    IA_2 = _create_population(model_name, N_IA_2, neuron_params)
     IA = IA_1 + IA_2
+
 
     #print(f"Created populations: E({E}), IH({IH}), IA({IA_1}+{IA_2})")
     # neuron_excitability: I_e pro Neuron
@@ -46,10 +54,19 @@ def build_populations(network_cfg: Dict[str, Any],
         mean = excitability_cfg["mean_pA"]
         std = excitability_cfg["std_pA"]
 
-        I_e_values = _truncated_normal_upper(rng=rng, mean=mean, std=std, upper=excitability_cfg["upper_bound_pA"], lower=excitability_cfg["lower_bound_pA"], size=N_E + N_IH + N_IA)
+        total_neurons = len(E) + len(IH) + len(IA)
+        if total_neurons:
+            I_e_values = _truncated_normal_upper(
+                rng=rng,
+                mean=mean,
+                std=std,
+                upper=excitability_cfg["upper_bound_pA"],
+                lower=excitability_cfg["lower_bound_pA"],
+                size=total_neurons,
+            )
 
-        for gid, I_e in zip(E + IH + IA, I_e_values):
-            nest.SetStatus(gid, {"I_e": I_e})
+            for gid, I_e in zip(E + IH + IA, I_e_values):
+                nest.SetStatus(gid, {"I_e": I_e})
 
     # neuron_noise: Noise pro Neuron
     if noise_cfg.get("enabled", False):
@@ -166,6 +183,10 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
             synapse_parameter["Wmax"] = -5000
 
     nest.CopyModel(model, copy_name, synapse_parameter)
+
+    if len(src) == 0:
+        return
+
     conn_all = {"rule": "all_to_all", "allow_autapses": False, "allow_multapses": True}
     syn_spec = {
         "synapse_model": copy_name,
@@ -173,6 +194,8 @@ def _connect_projection(src, targets, cfg: Dict[str, Any], base_Wmax, base_LR, g
         "delay": cfg["delay_ms"]
     }
     for target in targets:
+        if len(target) == 0:
+            continue
         nest.Connect(src, target, conn_spec=conn_all, syn_spec=syn_spec)
 
     

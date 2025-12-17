@@ -1,7 +1,7 @@
 # Common defaults for all experiments
 
 experiment:
-  name: "base_experiment"
+  name: "base_experiment_upscaled"
   simtime_ms: 60000
   seed: 12345
   nest:

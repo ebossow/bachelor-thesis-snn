@@ -14,6 +14,8 @@ def setup_recording(populations: Dict[str, Any],
     devices: Dict[str, Any] = {}
 
     for name, gids in populations.items():
+        if len(gids) == 0:
+            continue
         sd = nest.Create("spike_recorder")
         nest.Connect(gids, sd)
         devices[f"spikes_{name}"] = sd

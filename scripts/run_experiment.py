@@ -50,7 +50,7 @@ def main() -> None:
     # 2) Experiment ausführen
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_root = Path("results") / f"base_experiment" / f"run_{timestamp}"
+    base_root = Path("results") / f"base_experiment" / f"run_{timestamp}_{cfg['experiment']['name']}"
     base_root.mkdir(parents=True, exist_ok=True)
     run_dir = run_experiment_with_cfg(cfg, base_root)
     print(f"Experiment finished. Results saved in {run_dir}")
