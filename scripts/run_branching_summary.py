@@ -15,25 +15,6 @@ from src.analysis.metrics import (
 )
 
 
-def _collect_synaptic_delays_ms(cfg) -> list[float]:
-    """Return sorted unique synaptic delays (ms) found in config."""
-    delays: list[float] = []
-    syn_cfg = cfg.get("synapses", {}) if isinstance(cfg, dict) else {}
-    for entry in syn_cfg.values():
-        if isinstance(entry, dict) and "delay_ms" in entry:
-            try:
-                delays.append(float(entry["delay_ms"]))
-            except (TypeError, ValueError):
-                continue
-    if not delays:
-        return []
-    unique: list[float] = []
-    for value in sorted(delays):
-        if not any(math.isclose(value, seen, rel_tol=1e-9, abs_tol=1e-9) for seen in unique):
-            unique.append(value)
-    return unique
-
-
 def _plot_mr_regression(coeffs, fit_result, title: str | None = None) -> None:
     """Render r_k vs. lag along with the MR exponential fit."""
     import matplotlib.pyplot as plt  # local import to avoid hard dependency
@@ -86,8 +67,14 @@ def parse_args():
     p.add_argument(
         "--dt_min_ms",
         type=float,
-        default=2.0,
+        default=1.0,
         help="Minimale Binbreite dt in ms (Hard-Lower-Bound).",
+    )
+    p.add_argument(
+        "--mr_dt_ms",
+        type=float,
+        default=1.0,
+        help="Fester dt-Wert (ms) für MR-Regression und Tabelle; <=0 nutzt dt_factors.",
     )
     p.add_argument(
         "--plot_regression",
@@ -125,6 +112,8 @@ def parse_args():
         args.mr_fit_start_ms = None
     if args.mr_fit_stop_ms is not None and args.mr_fit_stop_ms <= 0.0:
         args.mr_fit_stop_ms = None
+    if args.mr_dt_ms is not None and args.mr_dt_ms <= 0.0:
+        args.mr_dt_ms = None
     if (
         args.mr_fit_start_ms is not None
         and args.mr_fit_stop_ms is not None
@@ -162,8 +151,6 @@ def main():
             continue
         dt_factors.append(float(tok))
     dt_factors = np.array(dt_factors, dtype=float)
-
-    synaptic_delays_ms = _collect_synaptic_delays_ms(cfg)
 
     # Spikes aller Populationen kombinieren
     spikes_all = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
@@ -203,10 +190,8 @@ def main():
     print(f"- N_total         : {N_total}")
     print(f"- AIEI (ms)       : {aiei_ms:.3f}")
     print(f"- dt_factors      : {', '.join(f'{f:.2f}' for f in dt_factors)}")
-    if synaptic_delays_ms:
-        print(
-            f"- Synaptic delays  : {', '.join(f'{d:.3f}' for d in synaptic_delays_ms)} ms"
-        )
+    if args.mr_dt_ms is not None:
+        print(f"- dt_manual (ms)  : {max(args.mr_dt_ms, args.dt_min_ms):.3f}")
     if not MRESTIMATOR_AVAILABLE:
         print("- MR estimator     : unavailable (install 'mrestimator')")
     elif args.plot_regression:
@@ -233,13 +218,15 @@ def main():
         dt_ms = max(dt_raw, args.dt_min_ms)
         dt_values_ms.append(dt_ms)
 
-    for delay_ms in synaptic_delays_ms:
-        dt_ms = max(delay_ms, args.dt_min_ms)
-        dt_values_ms.append(dt_ms)
+    if args.mr_dt_ms is not None:
+        dt_values_ms.append(max(args.mr_dt_ms, args.dt_min_ms))
 
     final_dt_values: list[float] = []
     for value in dt_values_ms:
-        if not any(math.isclose(value, existing, rel_tol=1e-9, abs_tol=1e-9) for existing in final_dt_values):
+        if not any(
+            math.isclose(value, existing, rel_tol=1e-9, abs_tol=1e-9)
+            for existing in final_dt_values
+        ):
             final_dt_values.append(value)
 
     # Für jeden dt: p0, sigma_global, sigma_MR
