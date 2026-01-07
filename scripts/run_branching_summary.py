@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import argparse
+import math
 import numpy as np
 
 from src.analysis.util import load_run, find_latest_run_dir, combine_spikes
@@ -9,7 +10,49 @@ from src.analysis.metrics import (
     average_inter_event_interval,
     empty_bin_fraction,
     branching_ratios_binned_global,
+    branching_ratio_mr_estimator,
+    MRESTIMATOR_AVAILABLE,
 )
+
+
+def _collect_synaptic_delays_ms(cfg) -> list[float]:
+    """Return sorted unique synaptic delays (ms) found in config."""
+    delays: list[float] = []
+    syn_cfg = cfg.get("synapses", {}) if isinstance(cfg, dict) else {}
+    for entry in syn_cfg.values():
+        if isinstance(entry, dict) and "delay_ms" in entry:
+            try:
+                delays.append(float(entry["delay_ms"]))
+            except (TypeError, ValueError):
+                continue
+    if not delays:
+        return []
+    unique: list[float] = []
+    for value in sorted(delays):
+        if not any(math.isclose(value, seen, rel_tol=1e-9, abs_tol=1e-9) for seen in unique):
+            unique.append(value)
+    return unique
+
+
+def _plot_mr_regression(coeffs, fit_result, title: str | None = None) -> None:
+    """Render r_k vs. lag along with the MR exponential fit."""
+    import matplotlib.pyplot as plt  # local import to avoid hard dependency
+
+    steps = np.asarray(coeffs.steps)
+    rk = np.asarray(coeffs.coefficients)
+    fit_vals = fit_result.fitfunc(steps, *fit_result.popt)
+    time_ms = steps * coeffs.dt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(time_ms, rk, "o", label=r"$r_k$ (data)")
+    ax.plot(time_ms, fit_vals, "-", label="MR fit")
+    ax.set_xlabel("Lag (ms)")
+    ax.set_ylabel(r"Correlation $r_k$")
+    ax.set_title(title or "MR regression")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    plt.show()
 
 
 def parse_args():
@@ -46,6 +89,11 @@ def parse_args():
         default=2.0,
         help="Minimale Binbreite dt in ms (Hard-Lower-Bound).",
     )
+    p.add_argument(
+        "--plot_regression",
+        action="store_true",
+        help="Wenn gesetzt, zeige MR-Autokorrelations-/Regressionsplot pro dt-Bin.",
+    )
     return p.parse_args()
 
 
@@ -75,6 +123,8 @@ def main():
             continue
         dt_factors.append(float(tok))
     dt_factors = np.array(dt_factors, dtype=float)
+
+    synaptic_delays_ms = _collect_synaptic_delays_ms(cfg)
 
     # Spikes aller Populationen kombinieren
     spikes_all = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
@@ -114,17 +164,38 @@ def main():
     print(f"- N_total         : {N_total}")
     print(f"- AIEI (ms)       : {aiei_ms:.3f}")
     print(f"- dt_factors      : {', '.join(f'{f:.2f}' for f in dt_factors)}")
+    if synaptic_delays_ms:
+        print(
+            f"- Synaptic delays  : {', '.join(f'{d:.3f}' for d in synaptic_delays_ms)} ms"
+        )
+    if not MRESTIMATOR_AVAILABLE:
+        print("- MR estimator     : unavailable (install 'mrestimator')")
+    elif args.plot_regression:
+        print("- Plot regression  : enabled")
     print()
 
     # Markdown-Tabelle Header
-    print("| dt/AIEI | dt (ms) | p0(dt) | sigma_global |")
-    print("|--------|---------|--------|--------------|")
+    print("| dt/AIEI | dt (ms) | p0(dt) | sigma_global | sigma_MR | tau_MR (ms) |")
+    print("|--------|---------|--------|--------------|----------|-------------|")
 
-    # Für jeden Faktor: dt, p0, sigma_global
+    dt_values_ms: list[float] = []
+
     for f in dt_factors:
         dt_raw = f * aiei_ms
-        dt_ms = max(dt_raw, args.dt_min_ms)  # Hard-Lower-Bound
+        dt_ms = max(dt_raw, args.dt_min_ms)
+        dt_values_ms.append(dt_ms)
 
+    for delay_ms in synaptic_delays_ms:
+        dt_ms = max(delay_ms, args.dt_min_ms)
+        dt_values_ms.append(dt_ms)
+
+    final_dt_values: list[float] = []
+    for value in dt_values_ms:
+        if not any(math.isclose(value, existing, rel_tol=1e-9, abs_tol=1e-9) for existing in final_dt_values):
+            final_dt_values.append(value)
+
+    # Für jeden dt: p0, sigma_global, sigma_MR
+    for dt_ms in final_dt_values:
         # p0(dt)
         p0 = empty_bin_fraction(
             times_ms=times,
@@ -135,19 +206,39 @@ def main():
 
         # Branching-Ratio (neuronwise, globaler Mittelwert)
         sigma_binned, sigma_binned_aval, counts = branching_ratios_binned_global(
-        times_ms=times,
-        t_start_ms=t_start_ms,
-        t_stop_ms=t_stop_ms,
-        dt_ms=dt_ms,
-        min_aval_len=2,
-    )
+            times_ms=times,
+            t_start_ms=t_start_ms,
+            t_stop_ms=t_stop_ms,
+            dt_ms=dt_ms,
+            min_aval_len=2,
+        )
+
+        want_details = args.plot_regression and MRESTIMATOR_AVAILABLE
+        result = branching_ratio_mr_estimator(
+            spike_counts=counts,
+            dt_ms=dt_ms,
+            return_details=want_details,
+        )
+
+        if want_details:
+            sigma_mr, tau_mr, coeffs, fit_result = result
+        else:
+            sigma_mr, tau_mr = result
+            coeffs = fit_result = None
 
         dt_over_aiei = dt_ms / aiei_ms
 
         # Tabellenzeile
         print(
-            f"| {dt_over_aiei:6.3f} | {dt_ms:7.3f} | {p0:6.3f} | {sigma_binned:12.3f} |"
+            f"| {dt_over_aiei:6.3f} | {dt_ms:7.3f} | {p0:6.3f} | {sigma_binned:12.3f} | {sigma_mr:8.3f} | {tau_mr:11.3f} |"
         )
+
+        if want_details and coeffs is not None and fit_result is not None:
+            title = f"MR regression dt={dt_ms:.3f} ms ({run_dir.name})"
+            try:
+                _plot_mr_regression(coeffs, fit_result, title)
+            except Exception as exc:  # pragma: no cover - plotting issues
+                print(f"[WARN] Could not plot MR regression for dt={dt_ms:.3f}: {exc}")
 
 
 if __name__ == "__main__":

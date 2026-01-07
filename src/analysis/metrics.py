@@ -4,8 +4,24 @@ from __future__ import annotations
 
 from typing import Dict, Any, Tuple
 
+import logging
+import warnings
 import numpy as np
 import numpy.typing as npt
+
+try:  # Optional dependency for MR estimator
+    import mrestimator as _mre
+except ImportError:  # pragma: no cover - best effort fallback
+    _mre = None
+
+try:  # Optional: only available when SciPy present
+    from scipy.optimize import OptimizeWarning as _OptimizeWarning
+except Exception:  # pragma: no cover - SciPy might be absent
+    _OptimizeWarning = None
+
+
+logger = logging.getLogger(__name__)
+MRESTIMATOR_AVAILABLE = _mre is not None
 
 
 def _build_sender_index(senders: npt.NDArray[np.int_],
@@ -833,6 +849,156 @@ def branching_ratio_from_counts(
 
     sigma = float(children.sum() / denom)
     return sigma
+
+
+def _resolve_mr_fit_function(fitfunc):
+    if _mre is None:
+        return None
+
+    if fitfunc is None:
+        return _mre.f_exponential
+    if callable(fitfunc):
+        return fitfunc
+
+    key = str(fitfunc).lower()
+    mapping = {
+        "e": _mre.f_exponential,
+        "exp": _mre.f_exponential,
+        "exponential": _mre.f_exponential,
+        "exp_offset": _mre.f_exponential_offset,
+        "exp_off": _mre.f_exponential_offset,
+        "exp_offs": _mre.f_exponential_offset,
+        "exponential_offset": _mre.f_exponential_offset,
+        "complex": _mre.f_complex,
+        "c": _mre.f_complex,
+    }
+    return mapping.get(key, _mre.f_exponential)
+
+
+def branching_ratio_mr_estimator(
+    spike_counts: npt.NDArray[np.int_],
+    dt_ms: float,
+    *,
+    method: str = "stationarymean",
+    steps: tuple[int, int] | npt.NDArray[np.int_] | None = None,
+    fitfunc: str | None | Any = "exp",
+    num_bootstrap: int = 0,
+    known_mean: float | None = None,
+    max_step_bins: int | None = 50,
+    raise_on_error: bool = False,
+    return_details: bool = False,
+) -> tuple[float, float] | tuple[float, float, Any, Any]:
+    """Estimate branching ratio via MR estimator (Wilting & Priesemann, 2018).
+
+    Parameters
+    ----------
+    spike_counts : array-like
+        Spike counts per time bin. Can be 1D (single trial) or 2D
+        ``(num_trials, num_bins)``.
+    dt_ms : float
+        Bin width in milliseconds (passed to :mod:`mrestimator`).
+    method : str, optional
+        ``'stationarymean'`` or ``'trialseparated'`` (aliases ``'sm'``/``'ts'``).
+    steps : tuple or array, optional
+        Step configuration forwarded to :func:`mrestimator.coefficients`.
+        ``None`` defaults to the library heuristics.
+        max_step_bins : int or None, optional
+            Upper bound for the automatically chosen ``steps`` range when
+            ``steps`` is ``None``. ``None`` keeps the library default.
+    fitfunc : str or callable, optional
+        Which built-in MR fit to use; defaults to the exponential model.
+    num_bootstrap : int, optional
+        Number of bootstrap replicas for coefficient estimation.
+    known_mean : float, optional
+        Forwarded as ``knownmean`` to :func:`mrestimator.coefficients`.
+    raise_on_error : bool, optional
+        Raise encountered exceptions instead of returning ``nan``.
+    return_details : bool, optional
+        If ``True``, additionally return the :class:`mrestimator.CoefficientResult`
+        and :class:`mrestimator.fit.FitResult` objects (``coeffs``, ``fit``).
+
+    Returns
+    -------
+    sigma_mr : float
+        Branching parameter ``m`` estimated by MR.
+    tau_ms : float
+        Autocorrelation time in milliseconds.
+    fit_result : optional
+        Returned when ``return_fit=True``.
+    """
+
+    if not MRESTIMATOR_AVAILABLE:
+        msg = "mrestimator is not installed; cannot compute MR estimator."
+        if raise_on_error:
+            raise ImportError(msg)
+        logger.warning(msg)
+        if return_details:
+            return float("nan"), float("nan"), None, None
+        return float("nan"), float("nan")
+
+    dt_ms = float(dt_ms)
+    if dt_ms <= 0.0:
+        raise ValueError("dt_ms must be > 0")
+
+    data = np.asarray(spike_counts, dtype=float)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    elif data.ndim != 2:
+        raise ValueError("spike_counts must be 1D or 2D array-like")
+
+    if data.shape[1] < 3:
+        logger.warning("Not enough bins (%d) for MR estimator", data.shape[1])
+        if return_details:
+            return float("nan"), float("nan"), None, None
+        return float("nan"), float("nan")
+
+    method_key = method.lower()
+    if method_key in ("sm", "stationarymean"):
+        method_arg = "stationarymean"
+    elif method_key in ("ts", "trialseparated"):
+        method_arg = "trialseparated"
+    else:
+        raise ValueError("method must be 'stationarymean' or 'trialseparated'")
+
+    steps_arg: tuple[int, int] | npt.NDArray[np.int_] | None
+    if steps is not None:
+        steps_arg = steps
+    elif max_step_bins is None:
+        steps_arg = (None, None)
+    else:
+        upper = max(1, min(int(max_step_bins), data.shape[1] // 2))
+        steps_arg = (1, upper)
+
+    try:
+        coeffs = _mre.coefficients(
+            data,
+            method=method_arg,
+            steps=steps_arg,
+            dt=dt_ms,
+            dtunit="ms",
+            knownmean=known_mean,
+            numboot=int(num_bootstrap),
+        )
+
+        fit_function = _resolve_mr_fit_function(fitfunc)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            if _OptimizeWarning is not None:
+                warnings.simplefilter("ignore", _OptimizeWarning)
+            fit_result = _mre.fit(coeffs, fitfunc=fit_function)
+        sigma_mr = float(fit_result.mre)
+        tau_ms = float(fit_result.tau) if fit_result.tau is not None else float("nan")
+    except Exception as exc:  # pragma: no cover - depends on external package
+        if raise_on_error:
+            raise
+        logger.warning("MR estimator failed: %s", exc)
+        if return_fit:
+            return float("nan"), float("nan"), None
+        return float("nan"), float("nan")
+
+    if return_details:
+        return sigma_mr, tau_ms, coeffs, fit_result
+    return sigma_mr, tau_ms
 
 def avalanche_segments_from_counts(
     spike_counts: npt.NDArray[np.int_],
