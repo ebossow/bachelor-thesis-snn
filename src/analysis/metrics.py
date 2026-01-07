@@ -875,6 +875,56 @@ def _resolve_mr_fit_function(fitfunc):
     return mapping.get(key, _mre.f_exponential)
 
 
+def _restrict_coefficients_to_lag_window(
+    coeffs,
+    min_lag_ms: float | None,
+    max_lag_ms: float | None,
+    min_points: int,
+):
+    """Return coefficients restricted to a lag window (inclusive)."""
+    if coeffs is None or (min_lag_ms is None and max_lag_ms is None):
+        return coeffs
+
+    steps = np.asarray(coeffs.steps, dtype=int)
+    if steps.size == 0:
+        return None
+
+    dt_ms = float(getattr(coeffs, "dt", 1.0))
+    lags_ms = steps.astype(float) * dt_ms
+
+    mask = np.ones_like(lags_ms, dtype=bool)
+    if min_lag_ms is not None:
+        mask &= lags_ms >= float(min_lag_ms)
+    if max_lag_ms is not None:
+        mask &= lags_ms <= float(max_lag_ms)
+
+    if not np.any(mask):
+        return None
+
+    if mask.sum() < max(1, int(min_points)):
+        return None
+
+    coeff_vals = np.asarray(coeffs.coefficients, dtype=float)[mask]
+    steps_sel = steps[mask]
+
+    replacements: dict[str, Any] = {
+        "coefficients": coeff_vals,
+        "steps": steps_sel,
+    }
+
+    stderrs = getattr(coeffs, "stderrs", None)
+    if stderrs is not None:
+        stderrs_arr = np.asarray(stderrs, dtype=float)
+        if stderrs_arr.shape == lags_ms.shape:
+            replacements["stderrs"] = stderrs_arr[mask]
+
+    # Drop correlation histories that no longer align with the filtered steps
+    replacements["bootstrapcrs"] = None
+    replacements["trialcrs"] = None
+
+    return coeffs._replace(**replacements)
+
+
 def branching_ratio_mr_estimator(
     spike_counts: npt.NDArray[np.int_],
     dt_ms: float,
@@ -885,6 +935,10 @@ def branching_ratio_mr_estimator(
     num_bootstrap: int = 0,
     known_mean: float | None = None,
     max_step_bins: int | None = 50,
+    fit_lag_ms_min: float | None = None,
+    fit_lag_ms_max: float | None = None,
+    fit_use_offset: bool | None = None,
+    min_fit_points: int = 3,
     raise_on_error: bool = False,
     return_details: bool = False,
 ) -> tuple[float, float] | tuple[float, float, Any, Any]:
@@ -911,6 +965,15 @@ def branching_ratio_mr_estimator(
         Number of bootstrap replicas for coefficient estimation.
     known_mean : float, optional
         Forwarded as ``knownmean`` to :func:`mrestimator.coefficients`.
+    fit_lag_ms_min : float, optional
+        Lower lag bound (ms) for the fit; ``None`` keeps the full range.
+    fit_lag_ms_max : float, optional
+        Upper lag bound (ms) for the fit; ``None`` keeps the full range.
+    fit_use_offset : bool, optional
+        Force the exponential-with-offset fit (``True``) or plain exponential
+        (``False``); ``None`` leaves ``fitfunc`` unchanged.
+    min_fit_points : int, optional
+        Minimum number of r_k samples required after windowing.
     raise_on_error : bool, optional
         Raise encountered exceptions instead of returning ``nan``.
     return_details : bool, optional
@@ -924,7 +987,7 @@ def branching_ratio_mr_estimator(
     tau_ms : float
         Autocorrelation time in milliseconds.
     fit_result : optional
-        Returned when ``return_fit=True``.
+        Returned when ``return_details=True``.
     """
 
     if not MRESTIMATOR_AVAILABLE:
@@ -960,6 +1023,13 @@ def branching_ratio_mr_estimator(
     else:
         raise ValueError("method must be 'stationarymean' or 'trialseparated'")
 
+    if (
+        fit_lag_ms_min is not None
+        and fit_lag_ms_max is not None
+        and float(fit_lag_ms_max) <= float(fit_lag_ms_min)
+    ):
+        raise ValueError("fit_lag_ms_max must be greater than fit_lag_ms_min")
+
     steps_arg: tuple[int, int] | npt.NDArray[np.int_] | None
     if steps is not None:
         steps_arg = steps
@@ -969,6 +1039,7 @@ def branching_ratio_mr_estimator(
         upper = max(1, min(int(max_step_bins), data.shape[1] // 2))
         steps_arg = (1, upper)
 
+    coeffs_to_fit = None
     try:
         coeffs = _mre.coefficients(
             data,
@@ -981,23 +1052,47 @@ def branching_ratio_mr_estimator(
         )
 
         fit_function = _resolve_mr_fit_function(fitfunc)
+        if fit_use_offset is True and _mre is not None:
+            fit_function = _mre.f_exponential_offset
+        elif fit_use_offset is False and _mre is not None:
+            fit_function = _mre.f_exponential
+
+        coeffs_to_fit = _restrict_coefficients_to_lag_window(
+            coeffs,
+            min_lag_ms=fit_lag_ms_min,
+            max_lag_ms=fit_lag_ms_max,
+            min_points=min_fit_points,
+        )
+
+        if coeffs_to_fit is None:
+            msg = (
+                "MR estimator: no coefficients remain after applying lag window;"
+                " relax fit_lag_ms_min/max or min_fit_points"
+            )
+            if raise_on_error:
+                raise ValueError(msg)
+            logger.warning(msg)
+            if return_details:
+                return float("nan"), float("nan"), None, None
+            return float("nan"), float("nan")
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             if _OptimizeWarning is not None:
                 warnings.simplefilter("ignore", _OptimizeWarning)
-            fit_result = _mre.fit(coeffs, fitfunc=fit_function)
+            fit_result = _mre.fit(coeffs_to_fit, fitfunc=fit_function)
         sigma_mr = float(fit_result.mre)
         tau_ms = float(fit_result.tau) if fit_result.tau is not None else float("nan")
     except Exception as exc:  # pragma: no cover - depends on external package
         if raise_on_error:
             raise
         logger.warning("MR estimator failed: %s", exc)
-        if return_fit:
-            return float("nan"), float("nan"), None
+        if return_details:
+            return float("nan"), float("nan"), None, None
         return float("nan"), float("nan")
 
     if return_details:
-        return sigma_mr, tau_ms, coeffs, fit_result
+        return sigma_mr, tau_ms, coeffs_to_fit, fit_result
     return sigma_mr, tau_ms
 
 def avalanche_segments_from_counts(

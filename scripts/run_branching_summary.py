@@ -94,7 +94,46 @@ def parse_args():
         action="store_true",
         help="Wenn gesetzt, zeige MR-Autokorrelations-/Regressionsplot pro dt-Bin.",
     )
-    return p.parse_args()
+    p.add_argument(
+        "--mr_fit_start_ms",
+        type=float,
+        default=10.0,
+        help="Unterer Lag-Grenzwert (ms) für den MR-Fit; <=0 nutzt alle Lags.",
+    )
+    p.add_argument(
+        "--mr_fit_stop_ms",
+        type=float,
+        default=60.0,
+        help="Oberer Lag-Grenzwert (ms) für den MR-Fit; <=0 nutzt alle Lags.",
+    )
+    p.add_argument(
+        "--mr_min_fit_points",
+        type=int,
+        default=3,
+        help="Minimale Anzahl r_k-Stützstellen nach dem Lag-Fenster.",
+    )
+    p.add_argument(
+        "--mr_fit_use_offset",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Nutze exp+offset-Modell (mit --no-mr_fit_use_offset für plain exp).",
+    )
+
+    args = p.parse_args()
+
+    if args.mr_fit_start_ms is not None and args.mr_fit_start_ms <= 0.0:
+        args.mr_fit_start_ms = None
+    if args.mr_fit_stop_ms is not None and args.mr_fit_stop_ms <= 0.0:
+        args.mr_fit_stop_ms = None
+    if (
+        args.mr_fit_start_ms is not None
+        and args.mr_fit_stop_ms is not None
+        and args.mr_fit_stop_ms <= args.mr_fit_start_ms
+    ):
+        p.error("--mr_fit_stop_ms must be greater than --mr_fit_start_ms")
+    args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
+
+    return args
 
 
 def main():
@@ -172,6 +211,15 @@ def main():
         print("- MR estimator     : unavailable (install 'mrestimator')")
     elif args.plot_regression:
         print("- Plot regression  : enabled")
+    if MRESTIMATOR_AVAILABLE:
+        window_desc = "full range"
+        if args.mr_fit_start_ms is not None or args.mr_fit_stop_ms is not None:
+            lo = args.mr_fit_start_ms if args.mr_fit_start_ms is not None else 0.0
+            hi = args.mr_fit_stop_ms if args.mr_fit_stop_ms is not None else float("inf")
+            window_desc = f"[{lo:.1f} ms, {hi if np.isfinite(hi) else np.inf:.1f} ms]"
+        offset_flag = "with offset" if args.mr_fit_use_offset else "no offset"
+        print(f"- MR fit window   : {window_desc} ({offset_flag})")
+        print(f"- MR min points   : {args.mr_min_fit_points}")
     print()
 
     # Markdown-Tabelle Header
@@ -217,6 +265,10 @@ def main():
         result = branching_ratio_mr_estimator(
             spike_counts=counts,
             dt_ms=dt_ms,
+            fit_lag_ms_min=args.mr_fit_start_ms,
+            fit_lag_ms_max=args.mr_fit_stop_ms,
+            fit_use_offset=args.mr_fit_use_offset,
+            min_fit_points=args.mr_min_fit_points,
             return_details=want_details,
         )
 
