@@ -1,0 +1,143 @@
+# Resting-state sweep without external stimulation.
+# Derived from base.yaml but tailored for alpha/beta scaling experiments.
+
+experiment:
+  name: "resting_with_factors"
+  simtime_ms: 20000
+  seed: 12345
+  nest:
+    resolution_ms: 1
+    threads: 6
+
+sweep:
+  alpha_min: 0.0
+  alpha_max: 2.0
+  beta_min: 0.0
+  beta_max: 2.0
+  num_steps: 11           # 11x11 grid
+  seeds_per_point: 1
+  dt_ms: 10.0             # default bin width for MR estimator
+  avalanche_bin_ms: 5.0    # bin width for avalanche detection
+
+scaling:
+  alpha_default: 1.0       # factor for E->E connections
+  beta_default: 1.0        # factor for I->E connections
+  apply_mode: "post_init" # scale after initial weight assignment
+
+network:
+  N_E: 80
+  N_IH: 10
+  N_IA_1: 5
+  N_IA_2: 5
+  N_IA: 10
+
+neuron_model:
+  name: "aeif_psc_exp"
+  params:
+    a: 0.0
+    b: 0.0
+    V_th: -50.4
+    E_L: -70.6
+    Delta_T: 2
+    C_m: 600
+    g_L: 30
+    tau_w: 1000000000
+    tau_minus: 50.0
+
+synapses:
+  base_Wmax: 40
+  base_LR: 0.001
+  global_lr: 0.008
+  E_to_X:
+    model: "stdp_synapse"
+    copy_model_name: "stdp_ex_asym"
+    synapse_parameter:
+      tau_plus: 20.0
+      lambda: 0.003
+      alpha: 0.35
+      mu_plus: 0
+      mu_minus: 0
+    manual_lambda:
+    delay_ms: 0.5
+    Wmax_factor: 8
+    weight_init:
+      distribution: "trunc_normal_rel_to_Wmax"
+      mean: 0.5
+      std: 0.2
+      lower_rel: 0.0
+  IH_to_X:
+    model: "vogels_sprekeler_synapse"
+    copy_model_name: "stdp_inh_sym_hebb"
+    synapse_parameter:
+      tau: 35.0
+      eta: 0.001
+      alpha: 0.05
+    delay_ms: 0.5
+    Wmax_factor: -16
+    weight_init:
+      distribution: "trunc_normal_rel_to_Wmax"
+      mean: 0.5
+      std: 0.2
+      lower_rel: 0.0
+  IA_to_X:
+    model: "vogels_sprekeler_synapse"
+    copy_model_name: "stdp_inh_sym_antihebb"
+    synapse_parameter:
+      tau: 35.0
+      eta: -0.001
+      alpha: 0.05
+    delay_ms: 0.5
+    Wmax_factor: -32
+    weight_init:
+      distribution: "trunc_normal_rel_to_Wmax"
+      mean: 0.5
+      std: 0.2
+      lower_rel: 0.0
+  weight_decay:
+    enabled: false
+    decay_factor: 1
+    decay_summand: 0
+    chunk_ms: 100.0
+    every_n_chunks: 10
+
+stimulation:
+  dc:
+    enabled: false
+    rnd_mean_pA: 405.0
+    rnd_std_pA: 20.0
+  pattern:
+    pulse_ms: 800.0
+    gap_ms: 200.0
+    t_on_ms: 5000.0
+    t_off_ms: 40000.0
+    split: 2
+    rng_seed: 1234
+    use_seed: false
+  mnist:
+    enabled: false
+    image_size: 28
+    pixel_current_pA: 405.0
+    image_path: "data/mnist/images.npy"
+    label_path: "data/mnist/labels.npy"
+
+neuron_excitability:
+  enabled: true
+  use_seed: true
+  rng_seed: 1001
+  mean_offset_pA: 0
+  std_pA: 1.5
+  upper_offset_pA: 2.0
+  lower_offset_pA: -2.0
+
+noise:
+  enabled: true
+  noise_mean: 0.0
+  noise_std: 40.0
+  weight: 1
+
+analysis:
+  spike_bin_ms: 10.0
+  variability_window_ms: 1000.0
+  weight_hist_bins: 50
+  mr_dt_ms: 10.0
+  avalanche_dt_ms: 5.0

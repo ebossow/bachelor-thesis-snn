@@ -36,6 +36,34 @@ def _plot_mr_regression(coeffs, fit_result, title: str | None = None) -> None:
     plt.show()
 
 
+def _parse_manual_dt_values(raw: str | None) -> list[float] | None:
+    """Parse --mr_dt_ms input into a clean list of positive dt values in ms."""
+
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1]
+
+    values: list[float] = []
+    for token in cleaned.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = float(token)
+        except ValueError as exc:  # pragma: no cover - argument parsing guard
+            raise ValueError(
+                f"Invalid number '{token}' for --mr_dt_ms (comma-separated floats required)."
+            ) from exc
+        if value > 0.0:
+            values.append(value)
+
+    return values or None
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Branching-Ratio-Zusammenfassung als Markdown-Tabelle."
@@ -72,9 +100,12 @@ def parse_args():
     )
     p.add_argument(
         "--mr_dt_ms",
-        type=float,
-        default=1.0,
-        help="Fester dt-Wert (ms) für MR-Regression und Tabelle; <=0 nutzt dt_factors.",
+        type=str,
+        default="1.0",
+        help=(
+            "Feste dt-Werte (ms) für MR-Regression/Tabelle; akzeptiert eine Zahl oder "
+            "Liste wie '1,2,3'. Werte <=0 deaktivieren den manuellen Eintrag."
+        ),
     )
     p.add_argument(
         "--plot_regression",
@@ -102,7 +133,7 @@ def parse_args():
     p.add_argument(
         "--mr_fit_use_offset",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Nutze exp+offset-Modell (mit --no-mr_fit_use_offset für plain exp).",
     )
 
@@ -112,8 +143,6 @@ def parse_args():
         args.mr_fit_start_ms = None
     if args.mr_fit_stop_ms is not None and args.mr_fit_stop_ms <= 0.0:
         args.mr_fit_stop_ms = None
-    if args.mr_dt_ms is not None and args.mr_dt_ms <= 0.0:
-        args.mr_dt_ms = None
     if (
         args.mr_fit_start_ms is not None
         and args.mr_fit_stop_ms is not None
@@ -121,6 +150,11 @@ def parse_args():
     ):
         p.error("--mr_fit_stop_ms must be greater than --mr_fit_start_ms")
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
+
+    try:
+        args.mr_dt_ms_values = _parse_manual_dt_values(args.mr_dt_ms)
+    except ValueError as exc:
+        p.error(str(exc))
 
     return args
 
@@ -190,8 +224,11 @@ def main():
     print(f"- N_total         : {N_total}")
     print(f"- AIEI (ms)       : {aiei_ms:.3f}")
     print(f"- dt_factors      : {', '.join(f'{f:.2f}' for f in dt_factors)}")
-    if args.mr_dt_ms is not None:
-        print(f"- dt_manual (ms)  : {max(args.mr_dt_ms, args.dt_min_ms):.3f}")
+    if args.mr_dt_ms_values:
+        manual_dt_desc = ", ".join(
+            f"{max(dt, args.dt_min_ms):.3f}" for dt in args.mr_dt_ms_values
+        )
+        print(f"- dt_manual (ms)  : {manual_dt_desc}")
     if not MRESTIMATOR_AVAILABLE:
         print("- MR estimator     : unavailable (install 'mrestimator')")
     elif args.plot_regression:
@@ -218,8 +255,9 @@ def main():
         dt_ms = max(dt_raw, args.dt_min_ms)
         dt_values_ms.append(dt_ms)
 
-    if args.mr_dt_ms is not None:
-        dt_values_ms.append(max(args.mr_dt_ms, args.dt_min_ms))
+    if args.mr_dt_ms_values:
+        for dt_ms in args.mr_dt_ms_values:
+            dt_values_ms.append(max(dt_ms, args.dt_min_ms))
 
     final_dt_values: list[float] = []
     for value in dt_values_ms:

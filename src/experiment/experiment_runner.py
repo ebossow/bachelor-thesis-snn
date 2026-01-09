@@ -9,6 +9,7 @@ from src.setup.stimulation import setup_stimulation
 from src.setup.recording import setup_recording
 from src.setup.run_simulation import run_simulation
 from src.experiment.io import make_run_dir, save_run
+from src.setup.scaling import apply_post_init_scaling
 
 
 def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=False) -> Path:
@@ -25,6 +26,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
         excitability_cfg=cfg["neuron_excitability"],
     )
     connect_synapses(pops, cfg["synapses"])
+    apply_post_init_scaling(pops, cfg.get("scaling"))
     stim_devs = setup_stimulation(pops, cfg["stimulation"])
     rec_devs = setup_recording(pops, cfg["analysis"])
 
