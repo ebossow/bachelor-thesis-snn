@@ -16,7 +16,7 @@ sweep:
   beta_max: 2.0
   num_steps: 11           # 11x11 grid
   seeds_per_point: 1
-  dt_ms: 10.0             # default bin width for MR estimator
+  dt_ms: 1.0             # default bin width for MR estimator
   avalanche_bin_ms: 5.0    # bin width for avalanche detection
 
 scaling:
