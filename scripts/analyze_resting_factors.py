@@ -170,11 +170,27 @@ def fit_powerlaw_exponent(values: np.ndarray, discrete: bool = True) -> float:
 
 
 def fit_gamma_exponent(sizes: np.ndarray, durations: np.ndarray) -> float:
-    mask = (np.asarray(sizes) > 0) & (np.asarray(durations) > 0)
+    size_arr = np.asarray(sizes, float)
+    duration_arr = np.asarray(durations, float)
+    mask = (size_arr > 0) & (duration_arr > 0)
     if mask.sum() < 2:
         return float("nan")
-    log_d = np.log(durations[mask])
-    log_s = np.log(sizes[mask])
+
+    # Match Fontenele et al. by regressing mean size per duration bin instead of raw points.
+    filtered_sizes = size_arr[mask]
+    filtered_durations = duration_arr[mask]
+    duration_unique, inverse = np.unique(filtered_durations, return_inverse=True)
+    mean_sizes = np.zeros(duration_unique.shape, float)
+    counts = np.zeros(duration_unique.shape, float)
+    np.add.at(mean_sizes, inverse, filtered_sizes)
+    np.add.at(counts, inverse, 1.0)
+    valid = counts > 0
+    if np.count_nonzero(valid) < 2:
+        return float("nan")
+    mean_sizes[valid] /= counts[valid]
+
+    log_d = np.log(duration_unique[valid])
+    log_s = np.log(mean_sizes[valid])
     if np.allclose(log_d, log_d[0]):
         return float("nan")
     slope, _ = np.polyfit(log_d, log_s, 1)
