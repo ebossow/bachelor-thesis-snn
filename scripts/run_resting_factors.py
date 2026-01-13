@@ -84,6 +84,11 @@ def parse_args() -> argparse.Namespace:
         help="Print planned runs without executing them",
     )
     parser.add_argument(
+        "--allow-stimulation",
+        action="store_true",
+        help="Keep stimulation settings from the config instead of forcing resting-state",
+    )
+    parser.add_argument(
         "--num-runs",
         type=int,
         default=1,
@@ -177,7 +182,6 @@ def run_sweep_instance(
     """Execute a full alpha/beta sweep inside run_root."""
     run_root.mkdir(parents=True, exist_ok=True)
     cfg_template = deepcopy(base_cfg)
-    ensure_resting_state(cfg_template)
     save_config_snapshot(cfg_template, run_root / "sweep_config_snapshot.yaml")
 
     summary_rows: list[dict] = []
@@ -278,7 +282,8 @@ def main() -> None:
         raise ValueError("--num-runs must be at least 1")
 
     base_cfg = load_base_config(args.config)
-    ensure_resting_state(base_cfg)
+    if not args.allow_stimulation:
+        ensure_resting_state(base_cfg)
 
     nest_cfg = base_cfg.setdefault("experiment", {}).setdefault("nest", {})
     if args.num_runs > 1:
