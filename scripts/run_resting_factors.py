@@ -280,6 +280,16 @@ def main() -> None:
     base_cfg = load_base_config(args.config)
     ensure_resting_state(base_cfg)
 
+    nest_cfg = base_cfg.setdefault("experiment", {}).setdefault("nest", {})
+    if args.num_runs > 1:
+        prev_threads = nest_cfg.get("threads")
+        nest_cfg["threads"] = 1
+        if prev_threads not in (None, 1):
+            print(
+                f"Parallel multi-run requested: overriding experiment.nest.threads "
+                f"from {prev_threads} to 1"
+            )
+
     alpha_vals, beta_vals, seeds_per_point = prepare_sweep(base_cfg, args)
     alpha_list = [float(val) for val in alpha_vals]
     beta_list = [float(val) for val in beta_vals]

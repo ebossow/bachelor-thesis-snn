@@ -30,12 +30,33 @@ from src.analysis.metrics import (
 from src.analysis.util import combine_spikes, load_run
 
 
+GRID_METRIC_KEYS = [
+    "sigma_mr",
+    "tau_mr_ms",
+    "tau_size",
+    "tau_duration",
+    "gamma_fitted",
+    "gamma_pred",
+    "dcc",
+    "aiei_ms",
+    "dt_avalanche_ms",
+    "n_counts",
+    "n_sizes",
+    "n_durations",
+]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze resting sweep results")
     parser.add_argument(
         "--sweep-dir",
         type=Path,
         help="Path to results/resting_with_factors/run_* directory",
+    )
+    parser.add_argument(
+        "--multi-run-dir",
+        type=Path,
+        help="Path to results/resting_with_factors/multiple_run_* directory",
     )
     parser.add_argument(
         "--results-root",
@@ -200,9 +221,9 @@ def fit_gamma_exponent(sizes: np.ndarray, durations: np.ndarray) -> float:
 def compute_gamma_pred(tau_size: float, tau_duration: float) -> float:
     if not np.isfinite(tau_size) or not np.isfinite(tau_duration):
         return float("nan")
-    if abs(tau_duration - 1.0) < 1e-9:
+    if abs(tau_size - 1.0) < 1e-9:
         return float("nan")
-    return float((tau_size - 1.0) / (tau_duration - 1.0))
+    return float((tau_duration - 1.0) / (tau_size - 1.0))
 
 
 def compute_dcc(tau_size: float, tau_duration: float, gamma_fitted: float) -> tuple[float, float]:
@@ -398,15 +419,73 @@ def plot_heatmap(
     plt.close(fig)
 
 
-def main() -> None:
-    args = parse_args()
+def build_average_rows(
+    alphas: np.ndarray,
+    betas: np.ndarray,
+    grids: dict[str, np.ndarray],
+    run_label: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bi, beta in enumerate(betas):
+        for ai, alpha in enumerate(alphas):
+            row = {
+                "alpha": float(alpha),
+                "beta": float(beta),
+                "run_name": run_label,
+            }
+            for key in GRID_METRIC_KEYS:
+                row[key] = float(grids[key][bi, ai])
+            rows.append(row)
+    return rows
 
-    sweep_dir = args.sweep_dir or find_latest_sweep_dir(args.results_root)
+
+def write_analysis_outputs(
+    result: dict[str, Any],
+    out_root: Path,
+    disable_plots: bool,
+) -> None:
+    out_root.mkdir(parents=True, exist_ok=True)
+    save_table(result["analysis_rows"], out_root / "metrics.csv")
+    payload: dict[str, Any] = {
+        "alphas": result["alphas"],
+        "betas": result["betas"],
+        "dt_mr_ms": result["dt_mr_ms"],
+    }
+    payload.update(result["grids"])
+    save_npz(out_root / "metrics.npz", payload)
+
+    if disable_plots:
+        return
+
+    sigma_grid = result["grids"]["sigma_mr"]
+    dcc_grid = result["grids"]["dcc"]
+    sigma_cmap, sigma_limits = build_sigma_colormap(sigma_grid)
+    plot_heatmap(
+        sigma_grid,
+        result["alphas"],
+        result["betas"],
+        "MR branching ratio",
+        out_root / "heatmap_sigma.png",
+        cmap=sigma_cmap,
+        color_limits=sigma_limits,
+    )
+    plot_heatmap(
+        dcc_grid,
+        result["alphas"],
+        result["betas"],
+        "Distance to criticality (DCC)",
+        out_root / "heatmap_dcc.png",
+    )
+
+
+def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, Any]:
     summary_rows = load_sweep_summary(sweep_dir)
     cfg_snapshot = load_config_snapshot(sweep_dir) or {}
 
     dt_mr_ms = args.mr_dt_ms or float(
-        cfg_snapshot.get("analysis", {}).get("mr_dt_ms", cfg_snapshot.get("analysis", {}).get("spike_bin_ms", 10.0))
+        cfg_snapshot.get("analysis", {}).get(
+            "mr_dt_ms", cfg_snapshot.get("analysis", {}).get("spike_bin_ms", 10.0)
+        )
     )
     dt_avalanche_override_ms = args.avalanche_dt_ms
 
@@ -414,18 +493,13 @@ def main() -> None:
     alpha_index = {float(val): idx for idx, val in enumerate(alphas)}
     beta_index = {float(val): idx for idx, val in enumerate(betas)}
 
-    sigma_grid = np.full((betas.size, alphas.size), np.nan)
-    dcc_grid = np.full_like(sigma_grid, np.nan)
-    tau_size_grid = np.full_like(sigma_grid, np.nan)
-    tau_duration_grid = np.full_like(sigma_grid, np.nan)
-    gamma_fit_grid = np.full_like(sigma_grid, np.nan)
-    gamma_pred_grid = np.full_like(sigma_grid, np.nan)
-    aiei_grid = np.full_like(sigma_grid, np.nan)
-    dt_avalanche_grid = np.full_like(sigma_grid, np.nan)
+    grids: dict[str, np.ndarray] = {
+        key: np.full((betas.size, alphas.size), np.nan)
+        for key in GRID_METRIC_KEYS
+    }
 
     analysis_rows: list[dict[str, Any]] = []
     out_root = sweep_dir / "analysis"
-    out_root.mkdir(parents=True, exist_ok=True)
 
     print(f"Analyzing sweep in {sweep_dir}")
     if dt_avalanche_override_ms is not None:
@@ -474,52 +548,106 @@ def main() -> None:
 
         bi = beta_index[beta]
         ai = alpha_index[alpha]
-        sigma_grid[bi, ai] = metrics["sigma_mr"]
-        dcc_grid[bi, ai] = metrics["dcc"]
-        tau_size_grid[bi, ai] = metrics["tau_size"]
-        tau_duration_grid[bi, ai] = metrics["tau_duration"]
-        gamma_fit_grid[bi, ai] = metrics["gamma_fitted"]
-        gamma_pred_grid[bi, ai] = metrics["gamma_pred"]
-        aiei_grid[bi, ai] = metrics["aiei_ms"]
-        dt_avalanche_grid[bi, ai] = metrics["dt_avalanche_ms"]
+        for key in GRID_METRIC_KEYS:
+            grids[key][bi, ai] = metrics[key]
         print(
             f"alpha={alpha:.2f}, beta={beta:.2f} -> sigma={metrics['sigma_mr']:.3f}, "
             f"tau_mr={metrics['tau_mr_ms']:.1f} ms, gamma_fit={metrics['gamma_fitted']:.3f}, "
             f"DCC={metrics['dcc']:.3f}"
         )
 
-    save_table(analysis_rows, out_root / "metrics.csv")
-    save_npz(
-        out_root / "metrics.npz",
-        {
-            "alphas": alphas,
-            "betas": betas,
-            "sigma_mr": sigma_grid,
-            "tau_size": tau_size_grid,
-            "tau_duration": tau_duration_grid,
-            "gamma_fitted": gamma_fit_grid,
-            "gamma_pred": gamma_pred_grid,
-            "dcc": dcc_grid,
-            "aiei_ms": aiei_grid,
-            "dt_avalanche_ms": dt_avalanche_grid,
-            "dt_mr_ms": dt_mr_ms,
-        },
-    )
-
-    if not args.disable_plots:
-        sigma_cmap, sigma_limits = build_sigma_colormap(sigma_grid)
-        plot_heatmap(
-            sigma_grid,
-            alphas,
-            betas,
-            "MR branching ratio",
-            out_root / "heatmap_sigma.png",
-            cmap=sigma_cmap,
-            color_limits=sigma_limits,
-        )
-        plot_heatmap(dcc_grid, alphas, betas, "Distance to criticality (DCC)", out_root / "heatmap_dcc.png")
-
+    result = {
+        "sweep_dir": sweep_dir,
+        "alphas": alphas,
+        "betas": betas,
+        "grids": grids,
+        "analysis_rows": analysis_rows,
+        "dt_mr_ms": dt_mr_ms,
+    }
+    write_analysis_outputs(result, out_root, args.disable_plots)
     print(f"Analysis artifacts saved to {out_root}")
+    return result
+
+
+def aggregate_multi_run_results(
+    results: list[dict[str, Any]],
+    multi_root: Path,
+) -> dict[str, Any]:
+    if not results:
+        raise RuntimeError("No successful sweep analyses to aggregate")
+
+    base = results[0]
+    alphas = base["alphas"]
+    betas = base["betas"]
+    dt_mr_ms = base["dt_mr_ms"]
+
+    for res in results[1:]:
+        if not np.allclose(res["alphas"], alphas):
+            raise ValueError("Alpha grids differ across runs; cannot average")
+        if not np.allclose(res["betas"], betas):
+            raise ValueError("Beta grids differ across runs; cannot average")
+        if not np.isclose(res["dt_mr_ms"], dt_mr_ms):
+            raise ValueError("MR dt differs across runs; cannot average")
+
+    aggregated_grids: dict[str, np.ndarray] = {}
+    for key in GRID_METRIC_KEYS:
+        stack = np.stack([res["grids"][key] for res in results], axis=0)
+        aggregated_grids[key] = np.nanmean(stack, axis=0)
+
+    analysis_rows = build_average_rows(
+        alphas,
+        betas,
+        aggregated_grids,
+        run_label=f"mean_of_{len(results)}_runs",
+    )
+    return {
+        "sweep_dir": multi_root,
+        "alphas": alphas,
+        "betas": betas,
+        "grids": aggregated_grids,
+        "analysis_rows": analysis_rows,
+        "dt_mr_ms": dt_mr_ms,
+    }
+
+
+def analyze_multi_run_parent(multi_root: Path, args: argparse.Namespace) -> None:
+    if not multi_root.exists():
+        raise FileNotFoundError(f"multi-run folder not found: {multi_root}")
+
+    run_dirs = sorted(
+        [p for p in multi_root.iterdir() if p.is_dir() and p.name.startswith("run_")]
+    )
+    if not run_dirs:
+        raise RuntimeError(f"No run_* directories found inside {multi_root}")
+
+    results: list[dict[str, Any]] = []
+    for run_dir in run_dirs:
+        try:
+            result = analyze_sweep_dir(run_dir, args)
+            results.append(result)
+        except Exception as exc:
+            print(f"Skipping {run_dir}: {exc}")
+
+    if not results:
+        raise RuntimeError("All run analyses failed; nothing to aggregate")
+
+    aggregate_result = aggregate_multi_run_results(results, multi_root)
+    aggregate_root = multi_root / "analysis_mean"
+    write_analysis_outputs(aggregate_result, aggregate_root, args.disable_plots)
+    print(f"Averaged analysis saved to {aggregate_root}")
+
+
+def main() -> None:
+    args = parse_args()
+    if args.multi_run_dir and args.sweep_dir:
+        raise ValueError("--multi-run-dir and --sweep-dir are mutually exclusive")
+
+    if args.multi_run_dir:
+        analyze_multi_run_parent(args.multi_run_dir, args)
+        return
+
+    sweep_dir = args.sweep_dir or find_latest_sweep_dir(args.results_root)
+    analyze_sweep_dir(sweep_dir, args)
 
 
 if __name__ == "__main__":
