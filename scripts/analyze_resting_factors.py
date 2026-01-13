@@ -43,6 +43,19 @@ GRID_METRIC_KEYS = [
     "n_counts",
     "n_sizes",
     "n_durations",
+    # New powerlaw diagnostic fields:
+    "pl_xmin_size",
+    "pl_ntail_size",
+    "pl_R_size_lognormal",
+    "pl_p_size_lognormal",
+    "pl_R_size_exponential",
+    "pl_p_size_exponential",
+    "pl_xmin_duration",
+    "pl_ntail_duration",
+    "pl_R_duration_lognormal",
+    "pl_p_duration_lognormal",
+    "pl_R_duration_exponential",
+    "pl_p_duration_exponential",
 ]
 
 
@@ -95,6 +108,23 @@ def parse_args() -> argparse.Namespace:
         help="Minimum avalanche size to consider",
     )
     parser.add_argument(
+        "--pl-min-samples",
+        type=int,
+        default=200,
+        help="Minimum number of avalanches required to attempt a power-law fit",
+    )
+    parser.add_argument(
+        "--pl-min-tail-samples",
+        type=int,
+        default=50,
+        help="Minimum number of samples in the fitted power-law tail (>= xmin)",
+    )
+    parser.add_argument(
+        "--pl-require-not-worse",
+        action="store_true",
+        help="If set, mark power-law exponents as NaN when power law is significantly worse than lognormal or exponential (based on likelihood-ratio test)",
+    )
+    parser.add_argument(
         "--disable-plots",
         action="store_true",
         help="Skip heatmap generation",
@@ -136,6 +166,8 @@ def parse_args() -> argparse.Namespace:
     ):
         parser.error("--mr-fit-stop-ms must be greater than --mr-fit-start-ms")
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
+    args.pl_min_samples = max(10, int(args.pl_min_samples))
+    args.pl_min_tail_samples = max(10, int(args.pl_min_tail_samples))
     return args
 
 
@@ -177,17 +209,67 @@ def build_grid_coords(rows: Iterable[dict[str, Any]]) -> Tuple[np.ndarray, np.nd
     return np.asarray(alpha_set, float), np.asarray(beta_set, float)
 
 
-def fit_powerlaw_exponent(values: np.ndarray, discrete: bool = True) -> float:
+
+def fit_powerlaw_diagnostics(values: np.ndarray, discrete: bool = True) -> dict[str, float]:
+    """Fit a power-law and return exponent plus basic diagnostics.
+
+    Returns NaNs when powerlaw is unavailable or the input is too small.
+
+    Diagnostics:
+      - xmin: lower cutoff selected by the fitter
+      - ntail: number of samples >= xmin
+      - R/p: likelihood-ratio comparison vs lognormal and exponential
+    """
+    out = {
+        "alpha": float("nan"),
+        "xmin": float("nan"),
+        "ntail": float("nan"),
+        "R_lognormal": float("nan"),
+        "p_lognormal": float("nan"),
+        "R_exponential": float("nan"),
+        "p_exponential": float("nan"),
+    }
     if not POWERLAW_AVAILABLE:
-        return float("nan")
+        return out
+
     vals = np.asarray(values, float)
+    vals = vals[np.isfinite(vals)]
     vals = vals[vals > 0]
     if vals.size < 5:
-        return float("nan")
+        return out
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fit = powerlaw.Fit(vals, verbose=False, discrete=discrete)  # type: ignore[arg-type]
-    return float(fit.power_law.alpha)
+
+    try:
+        out["alpha"] = float(fit.power_law.alpha)
+    except Exception:
+        out["alpha"] = float("nan")
+
+    try:
+        out["xmin"] = float(fit.xmin)
+        out["ntail"] = float(np.count_nonzero(vals >= out["xmin"]))
+    except Exception:
+        out["xmin"] = float("nan")
+        out["ntail"] = float("nan")
+
+    # Likelihood-ratio tests (R>0 => power law preferred; p is significance)
+    try:
+        R, p = fit.distribution_compare("power_law", "lognormal", normalized_ratio=True)
+        out["R_lognormal"] = float(R)
+        out["p_lognormal"] = float(p)
+    except Exception:
+        pass
+
+    try:
+        R, p = fit.distribution_compare("power_law", "exponential", normalized_ratio=True)
+        out["R_exponential"] = float(R)
+        out["p_exponential"] = float(p)
+    except Exception:
+        pass
+
+    return out
 
 
 def fit_gamma_exponent(sizes: np.ndarray, durations: np.ndarray) -> float:
@@ -258,6 +340,9 @@ def analyze_run(
     fit_lag_ms_max: float | None,
     fit_use_offset: bool,
     min_fit_points: int,
+    pl_min_samples: int,
+    pl_min_tail_samples: int,
+    pl_require_not_worse: bool,
 ) -> dict[str, float]:
     cfg, data, _, _ = load_run(run_path)
     simtime_ms = float(cfg["experiment"]["simtime_ms"])
@@ -280,6 +365,18 @@ def analyze_run(
         "n_sizes": float(0),
         "n_durations": float(0),
         "n_counts": float(0),
+        "pl_xmin_size": float("nan"),
+        "pl_ntail_size": float("nan"),
+        "pl_R_size_lognormal": float("nan"),
+        "pl_p_size_lognormal": float("nan"),
+        "pl_R_size_exponential": float("nan"),
+        "pl_p_size_exponential": float("nan"),
+        "pl_xmin_duration": float("nan"),
+        "pl_ntail_duration": float("nan"),
+        "pl_R_duration_lognormal": float("nan"),
+        "pl_p_duration_lognormal": float("nan"),
+        "pl_R_duration_exponential": float("nan"),
+        "pl_p_duration_exponential": float("nan"),
     }
     if times.size == 0:
         return result
@@ -317,8 +414,50 @@ def analyze_run(
     result["n_sizes"] = float(sizes.size)
     result["n_durations"] = float(durations.size)
 
-    tau_size = fit_powerlaw_exponent(sizes)
-    tau_duration = fit_powerlaw_exponent(durations)
+    # Power-law fits are only meaningful with enough events and enough tail samples.
+    tau_size = float("nan")
+    tau_duration = float("nan")
+
+    if sizes.size >= pl_min_samples:
+        diag_s = fit_powerlaw_diagnostics(sizes)
+        result["pl_xmin_size"] = diag_s["xmin"]
+        result["pl_ntail_size"] = diag_s["ntail"]
+        result["pl_R_size_lognormal"] = diag_s["R_lognormal"]
+        result["pl_p_size_lognormal"] = diag_s["p_lognormal"]
+        result["pl_R_size_exponential"] = diag_s["R_exponential"]
+        result["pl_p_size_exponential"] = diag_s["p_exponential"]
+
+        # accept exponent only if tail is large enough
+        if np.isfinite(diag_s["alpha"]) and np.isfinite(diag_s["ntail"]) and diag_s["ntail"] >= pl_min_tail_samples:
+            tau_size = float(diag_s["alpha"])
+
+            # optionally reject when power law is significantly worse than alternatives
+            if pl_require_not_worse:
+                # If lognormal is preferred (R<0) with significance, reject.
+                if np.isfinite(diag_s["R_lognormal"]) and np.isfinite(diag_s["p_lognormal"]) and diag_s["R_lognormal"] < 0 and diag_s["p_lognormal"] < 0.1:
+                    tau_size = float("nan")
+                # If exponential is preferred (R<0) with significance, reject.
+                if np.isfinite(diag_s["R_exponential"]) and np.isfinite(diag_s["p_exponential"]) and diag_s["R_exponential"] < 0 and diag_s["p_exponential"] < 0.1:
+                    tau_size = float("nan")
+
+    if durations.size >= pl_min_samples:
+        diag_t = fit_powerlaw_diagnostics(durations)
+        result["pl_xmin_duration"] = diag_t["xmin"]
+        result["pl_ntail_duration"] = diag_t["ntail"]
+        result["pl_R_duration_lognormal"] = diag_t["R_lognormal"]
+        result["pl_p_duration_lognormal"] = diag_t["p_lognormal"]
+        result["pl_R_duration_exponential"] = diag_t["R_exponential"]
+        result["pl_p_duration_exponential"] = diag_t["p_exponential"]
+
+        if np.isfinite(diag_t["alpha"]) and np.isfinite(diag_t["ntail"]) and diag_t["ntail"] >= pl_min_tail_samples:
+            tau_duration = float(diag_t["alpha"])
+
+            if pl_require_not_worse:
+                if np.isfinite(diag_t["R_lognormal"]) and np.isfinite(diag_t["p_lognormal"]) and diag_t["R_lognormal"] < 0 and diag_t["p_lognormal"] < 0.1:
+                    tau_duration = float("nan")
+                if np.isfinite(diag_t["R_exponential"]) and np.isfinite(diag_t["p_exponential"]) and diag_t["R_exponential"] < 0 and diag_t["p_exponential"] < 0.1:
+                    tau_duration = float("nan")
+
     result["tau_size"] = tau_size
     result["tau_duration"] = tau_duration
     gamma_fitted = fit_gamma_exponent(sizes, durations)
@@ -525,6 +664,9 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
             fit_lag_ms_max=args.mr_fit_stop_ms,
             fit_use_offset=bool(args.mr_fit_use_offset),
             min_fit_points=int(args.mr_min_fit_points),
+            pl_min_samples=int(args.pl_min_samples),
+            pl_min_tail_samples=int(args.pl_min_tail_samples),
+            pl_require_not_worse=bool(args.pl_require_not_worse),
         )
 
         analysis_row = {
@@ -542,6 +684,18 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
             "n_counts": metrics["n_counts"],
             "n_sizes": metrics["n_sizes"],
             "n_durations": metrics["n_durations"],
+            "pl_xmin_size": metrics["pl_xmin_size"],
+            "pl_ntail_size": metrics["pl_ntail_size"],
+            "pl_R_size_lognormal": metrics["pl_R_size_lognormal"],
+            "pl_p_size_lognormal": metrics["pl_p_size_lognormal"],
+            "pl_R_size_exponential": metrics["pl_R_size_exponential"],
+            "pl_p_size_exponential": metrics["pl_p_size_exponential"],
+            "pl_xmin_duration": metrics["pl_xmin_duration"],
+            "pl_ntail_duration": metrics["pl_ntail_duration"],
+            "pl_R_duration_lognormal": metrics["pl_R_duration_lognormal"],
+            "pl_p_duration_lognormal": metrics["pl_p_duration_lognormal"],
+            "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
+            "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
             "run_name": row.get("run_name"),
         }
         analysis_rows.append(analysis_row)
