@@ -58,6 +58,64 @@ GRID_METRIC_KEYS = [
     "pl_p_duration_exponential",
 ]
 
+def determine_analysis_windows(cfg_snapshot: dict[str, Any], args: argparse.Namespace) -> list[dict[str, float | str]]:
+    exp_cfg = cfg_snapshot.get("experiment", {})
+    if "simtime_ms" not in exp_cfg and args.t_stop_ms is None:
+        raise ValueError("experiment.simtime_ms missing; provide --t-stop-ms")
+    simtime_ms = float(exp_cfg.get("simtime_ms", args.t_stop_ms))
+
+    global_start = float(args.t_start_ms)
+    global_stop = float(args.t_stop_ms) if args.t_stop_ms is not None else simtime_ms
+    if global_stop <= global_start:
+        raise ValueError("Analysis window has non-positive duration; adjust --t-start-ms/--t-stop-ms")
+
+    if not args.dual_phase:
+        return [
+            {
+                "name": "overall",
+                "start_ms": global_start,
+                "stop_ms": global_stop,
+            }
+        ]
+
+    pattern_cfg = cfg_snapshot.get("stimulation", {}).get("pattern", {})
+    stim_on = args.stim_t_on_ms if args.stim_t_on_ms is not None else pattern_cfg.get("t_on_ms")
+    stim_off = args.stim_t_off_ms if args.stim_t_off_ms is not None else pattern_cfg.get("t_off_ms")
+    if stim_on is None or stim_off is None:
+        raise ValueError(
+            "--dual-phase requires stimulation.pattern.t_on_ms/t_off_ms or explicit overrides"
+        )
+
+    stim_on = float(stim_on)
+    stim_off = float(stim_off)
+
+    pre_start = global_start
+    pre_stop = min(stim_on, global_stop)
+    post_start = max(stim_off, global_start)
+    post_stop = global_stop
+
+    if pre_stop <= pre_start:
+        raise ValueError(
+            "Pre-learning window empty (check stimulation onset vs analysis start/stop)"
+        )
+    if post_stop <= post_start:
+        raise ValueError(
+            "Post-learning window empty (check stimulation offset vs analysis stop)"
+        )
+
+    return [
+        {
+            "name": args.phase_pre_name,
+            "start_ms": pre_start,
+            "stop_ms": pre_stop,
+        },
+        {
+            "name": args.phase_post_name,
+            "start_ms": post_start,
+            "stop_ms": post_stop,
+        },
+    ]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze resting sweep results")
@@ -152,6 +210,36 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use exponential-with-offset MR model (use --no-mr-fit-use-offset for plain exp)",
+    )
+    parser.add_argument(
+        "--dual-phase",
+        action="store_true",
+        help=(
+            "Compute metrics separately for resting (pre-stimulation) and post-learning "
+            "windows using stimulation.pattern t_on/t_off"
+        ),
+    )
+    parser.add_argument(
+        "--stim-t-on-ms",
+        type=float,
+        help="Override stimulation.pattern.t_on_ms when defining dual-phase windows",
+    )
+    parser.add_argument(
+        "--stim-t-off-ms",
+        type=float,
+        help="Override stimulation.pattern.t_off_ms when defining dual-phase windows",
+    )
+    parser.add_argument(
+        "--phase-pre-name",
+        type=str,
+        default="pre_learning",
+        help="Name for the pre-learning window when --dual-phase is enabled",
+    )
+    parser.add_argument(
+        "--phase-post-name",
+        type=str,
+        default="post_learning",
+        help="Name for the post-learning window when --dual-phase is enabled",
     )
 
     args = parser.parse_args()
@@ -563,6 +651,7 @@ def build_average_rows(
     betas: np.ndarray,
     grids: dict[str, np.ndarray],
     run_label: str,
+    window_name: str,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for bi, beta in enumerate(betas):
@@ -571,6 +660,7 @@ def build_average_rows(
                 "alpha": float(alpha),
                 "beta": float(beta),
                 "run_name": run_label,
+                "window": window_name,
             }
             for key in GRID_METRIC_KEYS:
                 row[key] = float(grids[key][bi, ai])
@@ -579,75 +669,75 @@ def build_average_rows(
 
 
 def write_analysis_outputs(
-    result: dict[str, Any],
+    window_result: dict[str, Any],
+    alphas: np.ndarray,
+    betas: np.ndarray,
+    dt_mr_ms: float,
     out_root: Path,
     disable_plots: bool,
 ) -> None:
     out_root.mkdir(parents=True, exist_ok=True)
-    save_table(result["analysis_rows"], out_root / "metrics.csv")
+    save_table(window_result["analysis_rows"], out_root / "metrics.csv")
     payload: dict[str, Any] = {
-        "alphas": result["alphas"],
-        "betas": result["betas"],
-        "dt_mr_ms": result["dt_mr_ms"],
+        "alphas": alphas,
+        "betas": betas,
+        "dt_mr_ms": dt_mr_ms,
+        "window_name": window_result["name"],
+        "window_start_ms": window_result["start_ms"],
+        "window_stop_ms": window_result["stop_ms"],
     }
-    payload.update(result["grids"])
+    payload.update(window_result["grids"])
     save_npz(out_root / "metrics.npz", payload)
 
     if disable_plots:
         return
 
-    sigma_grid = result["grids"]["sigma_mr"]
-    dcc_grid = result["grids"]["dcc"]
+    sigma_grid = window_result["grids"]["sigma_mr"]
+    dcc_grid = window_result["grids"]["dcc"]
     sigma_cmap, sigma_limits = build_sigma_colormap(sigma_grid)
     plot_heatmap(
         sigma_grid,
-        result["alphas"],
-        result["betas"],
-        "MR branching ratio",
+        alphas,
+        betas,
+        f"MR branching ratio ({window_result['name']})",
         out_root / "heatmap_sigma.png",
         cmap=sigma_cmap,
         color_limits=sigma_limits,
     )
     plot_heatmap(
         dcc_grid,
-        result["alphas"],
-        result["betas"],
-        "Distance to criticality (DCC)",
+        alphas,
+        betas,
+        f"Distance to criticality (DCC) [{window_result['name']}]",
         out_root / "heatmap_dcc.png",
     )
 
 
-def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, Any]:
-    summary_rows = load_sweep_summary(sweep_dir)
-    cfg_snapshot = load_config_snapshot(sweep_dir) or {}
-
-    dt_mr_ms = args.mr_dt_ms or float(
-        cfg_snapshot.get("analysis", {}).get(
-            "mr_dt_ms", cfg_snapshot.get("analysis", {}).get("spike_bin_ms", 10.0)
-        )
-    )
-    dt_avalanche_override_ms = args.avalanche_dt_ms
-
-    alphas, betas = build_grid_coords(summary_rows)
-    alpha_index = {float(val): idx for idx, val in enumerate(alphas)}
-    beta_index = {float(val): idx for idx, val in enumerate(betas)}
+def analyze_window(
+    summary_rows: list[dict[str, Any]],
+    sweep_dir: Path,
+    alpha_index: dict[float, int],
+    beta_index: dict[float, int],
+    alphas: np.ndarray,
+    betas: np.ndarray,
+    window: dict[str, float | str],
+    args: argparse.Namespace,
+    dt_mr_ms: float,
+    dt_avalanche_override_ms: float | None,
+) -> dict[str, Any]:
+    window_name = str(window["name"])
+    start_ms = float(window["start_ms"])
+    stop_ms = float(window["stop_ms"])
 
     grids: dict[str, np.ndarray] = {
         key: np.full((betas.size, alphas.size), np.nan)
         for key in GRID_METRIC_KEYS
     }
-
     analysis_rows: list[dict[str, Any]] = []
-    out_root = sweep_dir / "analysis"
 
-    print(f"Analyzing sweep in {sweep_dir}")
-    if dt_avalanche_override_ms is not None:
-        avalanche_dt_msg = f"{dt_avalanche_override_ms} ms (fixed)"
-    else:
-        avalanche_dt_msg = "AIEI-derived per run"
-    print(f"MR dt = {dt_mr_ms} ms | Avalanche dt = {avalanche_dt_msg}")
-    if not POWERLAW_AVAILABLE:
-        print("Warning: powerlaw package not installed; DCC exponents will be NaN")
+    print(
+        f"Window '{window_name}': analyzing spikes between {start_ms} ms and {stop_ms} ms"
+    )
 
     for row in summary_rows:
         alpha = float(row["alpha"])
@@ -655,8 +745,8 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
         run_path = resolve_run_path(row, sweep_dir)
         metrics = analyze_run(
             run_path=run_path,
-            t_start_ms=float(args.t_start_ms),
-            t_stop_override=args.t_stop_ms,
+            t_start_ms=start_ms,
+            t_stop_override=stop_ms,
             dt_mr_ms=dt_mr_ms,
             dt_avalanche_override_ms=dt_avalanche_override_ms,
             min_avalanche_size=int(args.min_avalanche_size),
@@ -697,6 +787,7 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
             "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
             "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
             "run_name": row.get("run_name"),
+            "window": window_name,
         }
         analysis_rows.append(analysis_row)
 
@@ -705,22 +796,79 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
         for key in GRID_METRIC_KEYS:
             grids[key][bi, ai] = metrics[key]
         print(
-            f"alpha={alpha:.2f}, beta={beta:.2f} -> sigma={metrics['sigma_mr']:.3f}, "
-            f"tau_mr={metrics['tau_mr_ms']:.1f} ms, gamma_fit={metrics['gamma_fitted']:.3f}, "
-            f"DCC={metrics['dcc']:.3f}"
+            f"[{window_name}] alpha={alpha:.2f}, beta={beta:.2f} -> "
+            f"sigma={metrics['sigma_mr']:.3f}, tau_mr={metrics['tau_mr_ms']:.1f} ms, "
+            f"gamma_fit={metrics['gamma_fitted']:.3f}, DCC={metrics['dcc']:.3f}"
         )
 
-    result = {
+    return {
+        "name": window_name,
+        "start_ms": start_ms,
+        "stop_ms": stop_ms,
+        "grids": grids,
+        "analysis_rows": analysis_rows,
+    }
+
+
+def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, Any]:
+    summary_rows = load_sweep_summary(sweep_dir)
+    cfg_snapshot = load_config_snapshot(sweep_dir) or {}
+
+    dt_mr_ms = args.mr_dt_ms or float(
+        cfg_snapshot.get("analysis", {}).get(
+            "mr_dt_ms", cfg_snapshot.get("analysis", {}).get("spike_bin_ms", 10.0)
+        )
+    )
+    dt_avalanche_override_ms = args.avalanche_dt_ms
+    windows = determine_analysis_windows(cfg_snapshot, args)
+
+    alphas, betas = build_grid_coords(summary_rows)
+    alpha_index = {float(val): idx for idx, val in enumerate(alphas)}
+    beta_index = {float(val): idx for idx, val in enumerate(betas)}
+
+    analysis_base = sweep_dir / "analysis"
+    analysis_base.mkdir(parents=True, exist_ok=True)
+
+    print(f"Analyzing sweep in {sweep_dir}")
+    if dt_avalanche_override_ms is not None:
+        avalanche_dt_msg = f"{dt_avalanche_override_ms} ms (fixed)"
+    else:
+        avalanche_dt_msg = "AIEI-derived per run"
+    print(f"MR dt = {dt_mr_ms} ms | Avalanche dt = {avalanche_dt_msg}")
+    if not POWERLAW_AVAILABLE:
+        print("Warning: powerlaw package not installed; DCC exponents will be NaN")
+
+    window_results: dict[str, dict[str, Any]] = {}
+    for window in windows:
+        window_result = analyze_window(
+            summary_rows=summary_rows,
+            sweep_dir=sweep_dir,
+            alpha_index=alpha_index,
+            beta_index=beta_index,
+            alphas=alphas,
+            betas=betas,
+            window=window,
+            args=args,
+            dt_mr_ms=dt_mr_ms,
+            dt_avalanche_override_ms=dt_avalanche_override_ms,
+        )
+        window_results[window_result["name"]] = window_result
+
+        if len(windows) == 1:
+            out_dir = analysis_base
+        else:
+            out_dir = analysis_base / window_result["name"]
+        write_analysis_outputs(window_result, alphas, betas, dt_mr_ms, out_dir, args.disable_plots)
+        print(f"Analysis artifacts saved to {out_dir}")
+
+    return {
         "sweep_dir": sweep_dir,
         "alphas": alphas,
         "betas": betas,
-        "grids": grids,
-        "analysis_rows": analysis_rows,
         "dt_mr_ms": dt_mr_ms,
+        "windows": window_results,
+        "window_order": [str(w["name"]) for w in windows],
     }
-    write_analysis_outputs(result, out_root, args.disable_plots)
-    print(f"Analysis artifacts saved to {out_root}")
-    return result
 
 
 def aggregate_multi_run_results(
@@ -734,6 +882,7 @@ def aggregate_multi_run_results(
     alphas = base["alphas"]
     betas = base["betas"]
     dt_mr_ms = base["dt_mr_ms"]
+    window_order = base["window_order"]
 
     for res in results[1:]:
         if not np.allclose(res["alphas"], alphas):
@@ -742,25 +891,39 @@ def aggregate_multi_run_results(
             raise ValueError("Beta grids differ across runs; cannot average")
         if not np.isclose(res["dt_mr_ms"], dt_mr_ms):
             raise ValueError("MR dt differs across runs; cannot average")
+        if res["window_order"] != window_order:
+            raise ValueError("Window layouts differ across runs; cannot average")
 
-    aggregated_grids: dict[str, np.ndarray] = {}
-    for key in GRID_METRIC_KEYS:
-        stack = np.stack([res["grids"][key] for res in results], axis=0)
-        aggregated_grids[key] = np.nanmean(stack, axis=0)
+    aggregated_windows: dict[str, dict[str, Any]] = {}
+    for window_name in window_order:
+        base_window = base["windows"][window_name]
+        aggregated_grids: dict[str, np.ndarray] = {}
+        for key in GRID_METRIC_KEYS:
+            stack = np.stack([res["windows"][window_name]["grids"][key] for res in results], axis=0)
+            aggregated_grids[key] = np.nanmean(stack, axis=0)
 
-    analysis_rows = build_average_rows(
-        alphas,
-        betas,
-        aggregated_grids,
-        run_label=f"mean_of_{len(results)}_runs",
-    )
+        analysis_rows = build_average_rows(
+            alphas,
+            betas,
+            aggregated_grids,
+            run_label=f"mean_of_{len(results)}_runs",
+            window_name=window_name,
+        )
+        aggregated_windows[window_name] = {
+            "name": window_name,
+            "start_ms": base_window["start_ms"],
+            "stop_ms": base_window["stop_ms"],
+            "grids": aggregated_grids,
+            "analysis_rows": analysis_rows,
+        }
+
     return {
         "sweep_dir": multi_root,
         "alphas": alphas,
         "betas": betas,
-        "grids": aggregated_grids,
-        "analysis_rows": analysis_rows,
         "dt_mr_ms": dt_mr_ms,
+        "windows": aggregated_windows,
+        "window_order": window_order,
     }
 
 
@@ -787,8 +950,24 @@ def analyze_multi_run_parent(multi_root: Path, args: argparse.Namespace) -> None
 
     aggregate_result = aggregate_multi_run_results(results, multi_root)
     aggregate_root = multi_root / "analysis_mean"
-    write_analysis_outputs(aggregate_result, aggregate_root, args.disable_plots)
-    print(f"Averaged analysis saved to {aggregate_root}")
+    aggregate_root.mkdir(parents=True, exist_ok=True)
+
+    window_order = aggregate_result["window_order"]
+    for window_name in window_order:
+        window_result = aggregate_result["windows"][window_name]
+        if len(window_order) == 1:
+            out_dir = aggregate_root
+        else:
+            out_dir = aggregate_root / window_name
+        write_analysis_outputs(
+            window_result,
+            aggregate_result["alphas"],
+            aggregate_result["betas"],
+            aggregate_result["dt_mr_ms"],
+            out_dir,
+            args.disable_plots,
+        )
+        print(f"Averaged analysis saved to {out_dir}")
 
 
 def main() -> None:

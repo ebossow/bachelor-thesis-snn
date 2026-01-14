@@ -30,13 +30,15 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
     stim_devs = setup_stimulation(pops, cfg["stimulation"])
     rec_devs = setup_recording(pops, cfg["analysis"])
 
+    snapshot_times = [0, cfg["stimulation"]["pattern"]["t_on_ms"], cfg["stimulation"]["pattern"]["t_off_ms"]]
+
     data = run_simulation(
         simtime_ms=cfg["experiment"]["simtime_ms"],
         recording_devices=rec_devs,
         populations=pops,
         synapse_cfg=cfg["synapses"],
         record_weight_trajectory=True,  # für K(t)
-        snapshot_times_ms=[40000.0],
+        snapshot_times_ms=snapshot_times,
     )
 
     #run_root = Path("results")
