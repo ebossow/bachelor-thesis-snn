@@ -25,6 +25,19 @@ def _scale_block(source, target, factor: float) -> None:
     conns.set({"weight": weights})
 
 
+def _scale_wmax(source, target, factor: float) -> None:
+    """Multiply the per-connection Wmax between ``source`` and ``target``."""
+    if factor == 1.0:
+        return
+    conns = nest.GetConnections(source=source, target=target)
+    n_conn = len(conns)
+    if n_conn == 0:
+        return
+    wmax_values = np.asarray(conns.get("Wmax"), dtype=float)
+    wmax_values *= factor
+    conns.set({"Wmax": wmax_values})
+
+
 def apply_post_init_scaling(populations: Dict[str, Any], scaling_cfg: Dict[str, Any] | None) -> None:
     """Apply alpha/beta scaling factors after network initialization."""
     if not scaling_cfg:
@@ -46,13 +59,16 @@ def apply_post_init_scaling(populations: Dict[str, Any], scaling_cfg: Dict[str, 
         return
 
     if alpha != 1.0:
-        logger.info("Applying alpha scaling %.3f to E->E weights", alpha)
+        logger.info("Applying alpha scaling %.3f to E->E weights and Wmax", alpha)
         _scale_block(pops_E, pops_E, alpha)
+        _scale_wmax(pops_E, pops_E, alpha)
 
     if beta != 1.0 and pops_IH is not None:
-        logger.info("Applying beta scaling %.3f to IH->E weights", beta)
+        logger.info("Applying beta scaling %.3f to IH->E weights and Wmax", beta)
         _scale_block(pops_IH, pops_E, beta)
+        _scale_wmax(pops_IH, pops_E, beta)
 
     if beta != 1.0 and pops_IA is not None:
-        logger.info("Applying beta scaling %.3f to IA->E weights", beta)
+        logger.info("Applying beta scaling %.3f to IA->E weights and Wmax", beta)
         _scale_block(pops_IA, pops_E, beta)
+        _scale_wmax(pops_IA, pops_E, beta)

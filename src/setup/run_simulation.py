@@ -10,10 +10,9 @@ import time
 def _apply_weight_decay_clipped(conns,
                                 decay_factor: float,
                                 clip_min: float,
-                                clip_max: float) -> None:
+                                clip_max) -> None:
     """
-    Multiply all weights in a ConnectionCollection by decay_factor
-    and clip to [clip_min, clip_max].
+    Subtract decay_factor from all weights and clip to [clip_min, clip_max].
     """
     weights = np.array(conns.get("weight"), dtype=float)
     #weights *= decay_factor
@@ -69,12 +68,6 @@ def run_simulation(
         "min =", w_now.min(),
         "max =", w_now.max())
 
-    # Wmax-Werte aus Config (beachte: inh negativ)
-    base_Wmax = float(synapse_cfg["base_Wmax"])
-    Wmax_exc      = float(synapse_cfg["E_to_X"]["Wmax_factor"])  * base_Wmax
-    Wmax_inh_hebb = float(synapse_cfg["IH_to_X"]["Wmax_factor"]) * base_Wmax
-    Wmax_inh_anti = float(synapse_cfg["IA_to_X"]["Wmax_factor"]) * base_Wmax
-
     # Gewichtstrajektorie (optional)
     weight_times: list[float] = []
     weight_snapshots: list[np.ndarray] = []
@@ -124,8 +117,8 @@ def run_simulation(
             if (i + 1) % every_n == 0:
                 factor = decay_factor ** every_n  # effektiver Faktor für diesen Block
                 summand = synapse_cfg["E_to_X"]["decay_summand"]
-                #_apply_weight_decay_clipped(conn_E,  factor, 0.0, Wmax_exc)
-                _apply_weight_decay_clipped(conn_E,  summand, 0.0, Wmax_exc)
+                clip_max = np.array(conn_E.get("Wmax"), dtype=float)
+                _apply_weight_decay_clipped(conn_E, summand, 0.0, clip_max)
 
             _snapshot_weights(current_time)
 
