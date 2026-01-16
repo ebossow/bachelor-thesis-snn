@@ -99,6 +99,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Maximum concurrent sweeps when running multiple runs",
     )
+    parser.add_argument(
+        "--pre-phase-seconds",
+        type=float,
+        default=30.0,
+        help="Duration of the pre-stimulation frozen phase in seconds (default: 30)",
+    )
+    parser.add_argument(
+        "--post-phase-seconds",
+        type=float,
+        default=600.0,
+        help="Duration of the post-stimulation frozen phase in seconds (default: 600)",
+    )
     return parser.parse_args()
 
 
@@ -135,6 +147,90 @@ def ensure_resting_state(cfg: dict) -> None:
     stim_cfg = cfg.setdefault("stimulation", {})
     stim_cfg.setdefault("dc", {})["enabled"] = False
     stim_cfg.setdefault("mnist", {})["enabled"] = False
+
+
+def apply_frozen_phase_schedule(cfg: dict, pre_phase_s: float, post_phase_s: float) -> None:
+    """Inject pre/post frozen phases by extending simtime and shifting stimulation."""
+
+    pre_ms = max(0.0, float(pre_phase_s) * 1000.0)
+    post_ms = max(0.0, float(post_phase_s) * 1000.0)
+    exp_cfg = cfg.setdefault("experiment", {})
+
+    if pre_ms <= 0.0 and post_ms <= 0.0:
+        # Clean up any previous schedule markers when disabled.
+        exp_cfg.pop("phase_schedule", None)
+        exp_cfg.pop("phase_markers_ms", None)
+        exp_cfg.pop("simtime_ms_main", None)
+        return
+
+    main_ms = float(exp_cfg.get("simtime_ms", 0.0))
+    total_ms = main_ms + pre_ms + post_ms
+
+    pattern_cfg = cfg.setdefault("stimulation", {}).setdefault("pattern", {})
+    orig_t_on = float(pattern_cfg.get("t_on_ms", 0.0))
+    orig_t_off = float(pattern_cfg.get("t_off_ms", main_ms))
+    shifted_t_on = orig_t_on + pre_ms
+    shifted_t_off = orig_t_off + pre_ms
+    pattern_cfg["t_on_ms"] = shifted_t_on
+    pattern_cfg["t_off_ms"] = shifted_t_off
+
+    segments: list[dict[str, float | bool | str]] = []
+    cursor = 0.0
+    if pre_ms > 0.0:
+        segments.append(
+            {
+                "name": "pre_frozen",
+                "start_ms": cursor,
+                "end_ms": cursor + pre_ms,
+                "plasticity_enabled": False,
+            }
+        )
+        cursor += pre_ms
+
+    segments.append(
+        {
+            "name": "main_plastic",
+            "start_ms": cursor,
+            "end_ms": cursor + main_ms,
+            "plasticity_enabled": True,
+        }
+    )
+    cursor += main_ms
+
+    if post_ms > 0.0:
+        segments.append(
+            {
+                "name": "post_frozen",
+                "start_ms": cursor,
+                "end_ms": cursor + post_ms,
+                "plasticity_enabled": False,
+            }
+        )
+        cursor += post_ms
+
+    phase_markers = {
+        "pre_start_ms": 0.0,
+        "pre_end_ms": pre_ms,
+        "main_start_ms": pre_ms,
+        "main_end_ms": pre_ms + main_ms,
+        "post_end_ms": total_ms,
+    }
+
+    if shifted_t_on is not None:
+        phase_markers["stim_on_ms"] = shifted_t_on
+    if shifted_t_off is not None:
+        phase_markers["stim_off_ms"] = shifted_t_off
+
+    exp_cfg["simtime_ms_main"] = main_ms
+    exp_cfg["simtime_ms"] = total_ms
+    exp_cfg["phase_schedule"] = {
+        "pre_ms": pre_ms,
+        "post_ms": post_ms,
+        "main_ms": main_ms,
+        "total_ms": total_ms,
+        "segments": segments,
+    }
+    exp_cfg["phase_markers_ms"] = phase_markers
 
 
 def update_scaling_block(cfg: dict, alpha: float, beta: float) -> None:
@@ -284,6 +380,11 @@ def main() -> None:
     base_cfg = load_base_config(args.config)
     if not args.allow_stimulation:
         ensure_resting_state(base_cfg)
+    apply_frozen_phase_schedule(
+        base_cfg,
+        pre_phase_s=float(args.pre_phase_seconds),
+        post_phase_s=float(args.post_phase_seconds),
+    )
 
     nest_cfg = base_cfg.setdefault("experiment", {}).setdefault("nest", {})
     if args.num_runs > 1:

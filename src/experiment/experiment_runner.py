@@ -12,6 +12,27 @@ from src.experiment.io import make_run_dir, save_run
 from src.setup.scaling import apply_post_init_scaling
 
 
+def _resolve_snapshot_times(cfg: Dict[str, Any]) -> list[float]:
+    exp_cfg = cfg.get("experiment", {})
+    total_ms = float(exp_cfg.get("simtime_ms", 0.0))
+    times: set[float] = {0.0, total_ms}
+
+    pattern_cfg = cfg.get("stimulation", {}).get("pattern", {})
+    for key in ("t_on_ms", "t_off_ms"):
+        val = pattern_cfg.get(key)
+        if val is not None:
+            times.add(float(val))
+
+    phase_markers = exp_cfg.get("phase_markers_ms") or {}
+    if isinstance(phase_markers, dict):
+        for val in phase_markers.values():
+            if isinstance(val, (int, float)):
+                times.add(float(val))
+
+    snapshot_times = sorted(t for t in times if 0.0 <= t <= total_ms)
+    return snapshot_times
+
+
 def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=False) -> Path:
     """
     Führe einen kompletten Run mit der gegebenen Config aus
@@ -30,7 +51,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
     stim_devs, stim_metadata = setup_stimulation(pops, cfg["stimulation"])
     rec_devs = setup_recording(pops, cfg["analysis"])
 
-    snapshot_times = [0, cfg["stimulation"]["pattern"]["t_on_ms"], cfg["stimulation"]["pattern"]["t_off_ms"]]
+    snapshot_times = _resolve_snapshot_times(cfg)
 
     data = run_simulation(
         simtime_ms=cfg["experiment"]["simtime_ms"],
@@ -39,6 +60,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
         synapse_cfg=cfg["synapses"],
         record_weight_trajectory=True,  # für K(t)
         snapshot_times_ms=snapshot_times,
+        phase_schedule=cfg["experiment"].get("phase_schedule"),
     )
 
     #run_root = Path("results")

@@ -40,6 +40,14 @@ def save_run(cfg: Dict[str, Any],
         "experiment_name": cfg["experiment"]["name"],
         "simtime_ms": cfg["experiment"]["simtime_ms"],
     }
+    if "simtime_ms_main" in cfg["experiment"]:
+        meta["simtime_ms_main"] = cfg["experiment"]["simtime_ms_main"]
+    phase_markers = cfg["experiment"].get("phase_markers_ms")
+    if phase_markers:
+        meta["phase_markers_ms"] = phase_markers
+    phase_schedule = cfg["experiment"].get("phase_schedule")
+    if phase_schedule:
+        meta["phase_schedule"] = phase_schedule
     with (run_dir / "metadata.yaml").open("w") as f:
         yaml.safe_dump(meta, f)
 
