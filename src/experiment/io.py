@@ -2,10 +2,11 @@
 
 from pathlib import Path
 import datetime as dt
+import json
 import yaml
 import numpy as np
 import nest
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 def make_run_dir(root: Path, experiment_name: str) -> Path:
@@ -18,7 +19,8 @@ def make_run_dir(root: Path, experiment_name: str) -> Path:
 def save_run(cfg: Dict[str, Any],
              data: Dict[str, Any],
              run_dir: Path,
-             pops) -> None:
+             pops,
+             stim_metadata: Optional[Dict[str, Any]] = None) -> None:
     # Config
     with (run_dir / "config_resolved.yaml").open("w") as f:
         yaml.safe_dump(cfg, f)
@@ -40,6 +42,10 @@ def save_run(cfg: Dict[str, Any],
     }
     with (run_dir / "metadata.yaml").open("w") as f:
         yaml.safe_dump(meta, f)
+
+    if stim_metadata:
+        with (run_dir / "stimulation_metadata.json").open("w") as f:
+            json.dump(stim_metadata, f, indent=2)
 
     all_neurons = pops["E"] + pops["IH"] + pops["IA"]
     conns = nest.GetConnections(all_neurons, all_neurons)

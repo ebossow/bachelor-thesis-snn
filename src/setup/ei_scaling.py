@@ -19,7 +19,7 @@ def load_scaled_snapshot_from_run(
     Rückgabe:
         sources_scaled, targets_scaled, weights_scaled, cfg
     """
-    cfg, data, weights_data, weights_over_time = load_run(run_dir)
+    cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
 
     if weights_over_time is None:
         raise ValueError("Run has no weights_trajectory – snapshot_time_ms nicht verfügbar.")

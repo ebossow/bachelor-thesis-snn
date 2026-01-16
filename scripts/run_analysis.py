@@ -45,7 +45,7 @@ def main():
         run_dir = find_latest_run_dir(results_root)
         print(f"Using latest run directory: {run_dir}")
 
-    cfg, data, weights_data, weights_over_time = load_run(run_dir)
+    cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
     metrics = compute_summary_metrics(cfg, data, weights_over_time)
     if args.animation:
         #plot_population_activity_interactive(cfg, data, bin_size_ms=50.0) # animation with fire rates

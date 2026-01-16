@@ -169,7 +169,7 @@ def main():
         results_root = Path("results")
         run_dir = find_latest_run_dir(results_root)
 
-    cfg, data, weights_data, weights_over_time = load_run(run_dir)
+    cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
 
     simtime_ms = float(cfg["experiment"]["simtime_ms"])
     t_off_ms = float(cfg["stimulation"]["pattern"].get("t_off_ms", 0.0))

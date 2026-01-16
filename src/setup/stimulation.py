@@ -1,23 +1,40 @@
 # src/setup/stimulation.py
 
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 import nest
 import numpy as np
 import matplotlib.pyplot as plt
 
+def _to_id_list(collection) -> list[int]:
+    """Convert a NodeCollection/slice or scalar id to a plain Python list."""
+    if collection is None:
+        return []
+    # Try the lightweight NodeCollection API first.
+    if hasattr(collection, "tolist"):
+        try:
+            as_list = collection.tolist()
+            if isinstance(as_list, list):
+                return [int(gid) for gid in as_list]
+        except Exception:
+            pass
+
+    # Fall back to generic iteration (handles lists/tuples of ids).
+    try:
+        return [int(gid) for gid in collection]
+    except TypeError:
+        # Not iterable -> treat as scalar id.
+        return [int(collection)]
+
 def setup_stimulation(populations: Dict[str, Any],
-                      stim_cfg: Dict[str, Any]) -> Dict[str, Any]:
+                      stim_cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    Stimulation für die Populationen anlegen.
+    Stimulation für die Populationen anlegen und begleitende Metadaten erzeugen.
 
-    - Wenn mnist.enabled = True:
-        * MNIST-Strom auf E-Population
-        * optional DC-Block-Stimulus weiterhin auf Inhibitoren (IH+IA)
-    - Wenn mnist.enabled = False und dc.enabled = True:
-        * alter DC-Block-Stimulus auf E und I (wie bisher)
-
-    Rückgabe: Dict mit optionalen Einträgen "mnist" und "dc".
+    Rückgabe: (created_devices, stimulation_metadata)
+      - created_devices entspricht dem bisherigen Dict mit "mnist" / "dc" Einträgen.
+      - stimulation_metadata enthält die Pulsfolge sowie Populations-/Pattern-Mappings
+        (für spätere Analysen).
     """
     created: Dict[str, Any] = {}
 
@@ -29,13 +46,27 @@ def setup_stimulation(populations: Dict[str, Any],
     dc_enabled = bool(dc_cfg.get("enabled", False))
 
     # Gemeinsame Pulsfolge für alle Stimuli, wenn gebraucht
-    pulses = []
+    pulses: list[tuple[float, float, int]] = []
     if mnist_enabled or dc_enabled:
         pulses = _build_random_pulses(pattern_cfg)
 
+    pattern_meta = {
+        "t_on_ms": float(pattern_cfg.get("t_on_ms", 0.0)),
+        "t_off_ms": float(pattern_cfg.get("t_off_ms", 0.0)),
+        "pulse_ms": float(pattern_cfg.get("pulse_ms", 0.0)),
+        "gap_ms": float(pattern_cfg.get("gap_ms", 0.0)),
+        "split": int(pattern_cfg.get("split", 1)),
+    }
+    stim_metadata: Dict[str, Any] = {
+        "pattern": pattern_meta,
+        "pulses": [[float(t0), float(t1), int(idx)] for (t0, t1, idx) in pulses],
+        "mnist": None,
+        "dc": None,
+    }
+
     # 1) MNIST-Stimulation auf E
     if mnist_enabled:
-        created["mnist"] = _setup_mnist_stimulation(
+        created["mnist"], stim_metadata["mnist"] = _setup_mnist_stimulation(
             populations=populations,
             pattern_cfg=pattern_cfg,
             pulses=pulses,
@@ -47,7 +78,7 @@ def setup_stimulation(populations: Dict[str, Any],
         # Wenn MNIST aktiv ist: DC nur auf Inhibitoren (IH+IA)
         only_inhibitory = mnist_enabled
 
-        created["dc"] = _setup_dc_block_stimulation(
+        created["dc"], stim_metadata["dc"] = _setup_dc_block_stimulation(
             populations=populations,
             dc_cfg=dc_cfg,
             pattern_cfg=pattern_cfg,
@@ -55,7 +86,7 @@ def setup_stimulation(populations: Dict[str, Any],
             only_inhibitory=only_inhibitory
         )
 
-    return created
+    return created, stim_metadata
 
 
 # --------------------------------------------------------------------------
@@ -66,7 +97,7 @@ def _setup_dc_block_stimulation(populations: Dict[str, Any],
                                 dc_cfg: Dict[str, Any],
                                 pattern_cfg: Dict[str, Any],
                                 pulses: list[tuple[float, float, int]],
-                                only_inhibitory: bool = False) -> Dict[str, Any]:
+                                only_inhibitory: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     DC-Stimulation mit Puls/Gap/Random-Amplitude.
 
@@ -93,10 +124,53 @@ def _setup_dc_block_stimulation(populations: Dict[str, Any],
 
     i_A, i_B = _split_half(pop_I)
 
+    metadata = {
+        "enabled": True,
+        "only_inhibitory": only_inhibitory,
+        "rnd_mean_pA": rnd_mean_pA,
+        "rnd_std_pA": rnd_std_pA,
+        "blocks": [],
+    }
+
+    if e_A is not None:
+        metadata["blocks"].append(
+            {
+                "label": "E_half_0",
+                "population": "E",
+                "pattern_index": 0,
+                "neuron_ids": _to_id_list(e_A),
+            }
+        )
+        metadata["blocks"].append(
+            {
+                "label": "E_half_1",
+                "population": "E",
+                "pattern_index": 1,
+                "neuron_ids": _to_id_list(e_B),
+            }
+        )
+
+    metadata["blocks"].append(
+        {
+            "label": "I_half_0",
+            "population": "I",
+            "pattern_index": 0,
+            "neuron_ids": _to_id_list(i_A),
+        }
+    )
+    metadata["blocks"].append(
+        {
+            "label": "I_half_1",
+            "population": "I",
+            "pattern_index": 1,
+            "neuron_ids": _to_id_list(i_B),
+        }
+    )
+
     created = {"E": [], "I": []}
 
     if not pulses:
-        return created
+        return created, metadata
 
     for (t_start, t_end, pattern_idx) in pulses:
         targets = {}
@@ -117,7 +191,7 @@ def _setup_dc_block_stimulation(populations: Dict[str, Any],
             nest.Connect(dc, tgt)
             created[key].append(dc)
 
-    return created
+    return created, metadata
 
 
 def _split_half(pop):
@@ -132,7 +206,7 @@ def _split_half(pop):
 def _setup_mnist_stimulation(populations: Dict[str, Any],
                              pattern_cfg: Dict[str, Any],
                              pulses: list[tuple[float, float, int]],
-                             mnist_cfg: Dict[str, Any]) -> Dict[str, Any]:
+                             mnist_cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     MNIST-basierte Stimulation:
 
@@ -154,6 +228,9 @@ def _setup_mnist_stimulation(populations: Dict[str, Any],
 
     idx0 = np.where(labels == 0)[0][0]
     idx1 = np.where(labels == 1)[0][0]
+
+    label0 = int(labels[idx0])
+    label1 = int(labels[idx1])
 
     img0_28 = images_all[idx0].astype(float)  # (28, 28)
     img1_28 = images_all[idx1].astype(float)  # (28, 28)
@@ -186,8 +263,33 @@ def _setup_mnist_stimulation(populations: Dict[str, Any],
 
     created = {"E": [], "I": []}
 
+    metadata = {
+        "enabled": True,
+        "image_size": image_size,
+        "pattern_labels": [label0, label1],
+        "pixel_current_pA_E": pixel_I_max_E,
+        "pixel_current_pA_inh": pixel_I_max_inh,
+        "E": {
+            "neuron_ids": _to_id_list(pop_E[:n_target_E]),
+            "pattern_currents_pA": [
+                (images_E[idx][:n_target_E] * pixel_I_max_E).astype(float).tolist()
+                for idx in range(len(images_E))
+            ],
+        },
+        "I": {
+            "half_A_neuron_ids": _to_id_list(pop_I_A[:n_target_A]),
+            "half_B_neuron_ids": _to_id_list(pop_I_B[:n_target_B]),
+            "half_A_pattern_currents_pA": (images_I[0][:n_target_A] * pixel_I_max_inh)
+            .astype(float)
+            .tolist(),
+            "half_B_pattern_currents_pA": (images_I[1][:n_target_B] * pixel_I_max_inh)
+            .astype(float)
+            .tolist(),
+        },
+    }
+
     if not pulses:
-        return created
+        return created, metadata
 
     # -----------------------------
     # 1) E-Population stimulieren
@@ -291,7 +393,7 @@ def _setup_mnist_stimulation(populations: Dict[str, Any],
         nest.Connect(scg, pop_I_B[k])
         created["I"].append(scg)
 
-    return created
+    return created, metadata
 
 
 # --------------------------------------------------------------------------

@@ -27,7 +27,7 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
     )
     connect_synapses(pops, cfg["synapses"])
     apply_post_init_scaling(pops, cfg.get("scaling"))
-    stim_devs = setup_stimulation(pops, cfg["stimulation"])
+    stim_devs, stim_metadata = setup_stimulation(pops, cfg["stimulation"])
     rec_devs = setup_recording(pops, cfg["analysis"])
 
     snapshot_times = [0, cfg["stimulation"]["pattern"]["t_on_ms"], cfg["stimulation"]["pattern"]["t_off_ms"]]
@@ -44,10 +44,10 @@ def run_experiment_with_cfg(cfg: Dict[str, Any], result_path, multithreaded=Fals
     #run_root = Path("results")
     if multithreaded:
         run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
-        save_run(cfg, data, run_dir, pops)
+        save_run(cfg, data, run_dir, pops, stim_metadata=stim_metadata)
         return run_dir
     else:
         #run_dir = make_run_dir(result_path, cfg["experiment"]["name"])
-        save_run(cfg, data, result_path, pops)
+        save_run(cfg, data, result_path, pops, stim_metadata=stim_metadata)
         return result_path
     

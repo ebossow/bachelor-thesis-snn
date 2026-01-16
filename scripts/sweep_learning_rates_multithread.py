@@ -51,7 +51,7 @@ def run_single_config(
     run_dir = run_experiment_with_cfg(cfg, result_path, mulithreaded=True)
 
     # Run laden und Metriken berechnen
-    cfg_run, data, weights_data, weights_over_time = load_run(run_dir)
+    cfg_run, data, weights_data, weights_over_time, _ = load_run(run_dir)
     metrics = compute_summary_metrics(cfg_run, data, weights_over_time)
 
     row = {

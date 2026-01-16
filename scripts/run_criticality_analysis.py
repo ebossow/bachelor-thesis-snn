@@ -57,7 +57,7 @@ def main():
         print(f"Using latest run directory: {run_dir}")
 
     # Run laden
-    cfg, data, weights_data, weights_over_time = load_run(run_dir)
+    cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
 
     simtime_ms = float(cfg["experiment"]["simtime_ms"])
     if cfg["stimulation"]["dc"]["enabled"]:

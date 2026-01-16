@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -27,7 +28,7 @@ from src.analysis.metrics import (
     binned_spike_counts,
     branching_ratio_mr_estimator,
 )
-from src.analysis.util import combine_spikes, load_run
+from src.analysis.util import combine_spikes, load_run, load_stimulation_metadata
 
 
 GRID_METRIC_KEYS = [
@@ -57,6 +58,173 @@ GRID_METRIC_KEYS = [
     "pl_R_duration_exponential",
     "pl_p_duration_exponential",
 ]
+
+MNIST_PATTERN_CURRENT_THRESHOLD_P_A = 1e-9
+
+
+def slugify_label(label: str) -> str:
+    slug = re.sub(r"[^0-9A-Za-z_-]+", "_", label.strip())
+    slug = slug.strip("_")
+    return slug or "population"
+
+
+def base_population_specs() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "Whole Population",
+            "folder": "whole_population",
+            "spike_keys": ("spikes_E", "spikes_IH", "spikes_IA"),
+            "filter": None,
+        },
+        {
+            "name": "Excitatory Only",
+            "folder": "e_only",
+            "spike_keys": ("spikes_E",),
+            "filter": None,
+        },
+    ]
+
+
+def build_population_specs(stim_metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    specs = base_population_specs()
+    specs.extend(build_stimulus_population_specs(stim_metadata))
+    return specs
+
+
+def build_stimulus_population_specs(stim_metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not stim_metadata:
+        return []
+    specs: list[dict[str, Any]] = []
+    specs.extend(_build_dc_block_specs(stim_metadata))
+    specs.extend(_build_mnist_pattern_specs(stim_metadata))
+    return specs
+
+
+def _build_dc_block_specs(stim_metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    dc_meta = stim_metadata.get("dc")
+    if not isinstance(dc_meta, dict):
+        return []
+    specs: list[dict[str, Any]] = []
+    for block in dc_meta.get("blocks", []):
+        if not isinstance(block, dict):
+            continue
+        if block.get("population") != "E":
+            continue
+        label = str(block.get("label") or f"dc_block_{block.get('pattern_index', 0)}")
+        folder = slugify_label(f"stimulus_block_{label}")
+        filter_info: dict[str, Any] = {
+            "kind": "dc_block",
+        }
+        if block.get("label") is not None:
+            filter_info["label"] = block["label"]
+        if block.get("pattern_index") is not None:
+            filter_info["pattern_index"] = block["pattern_index"]
+        specs.append(
+            {
+                "name": f"Stimulus Block {label}",
+                "folder": folder,
+                "spike_keys": ("spikes_E",),
+                "filter": filter_info,
+            }
+        )
+    return specs
+
+
+def _build_mnist_pattern_specs(stim_metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    mnist_meta = stim_metadata.get("mnist")
+    if not isinstance(mnist_meta, dict):
+        return []
+    e_meta = mnist_meta.get("E") or {}
+    pattern_currents = e_meta.get("pattern_currents_pA") or []
+    if not pattern_currents:
+        return []
+    specs: list[dict[str, Any]] = []
+    pattern_labels = mnist_meta.get("pattern_labels") or []
+    for idx, currents in enumerate(pattern_currents):
+        # Skip patterns without any activated neurons above threshold
+        if not any(float(val) > MNIST_PATTERN_CURRENT_THRESHOLD_P_A for val in currents):
+            continue
+        label = pattern_labels[idx] if idx < len(pattern_labels) else idx
+        folder = slugify_label(f"stimulus_pattern_{label}_{idx}")
+        specs.append(
+            {
+                "name": f"Stimulus Pattern {label}",
+                "folder": folder,
+                "spike_keys": ("spikes_E",),
+                "filter": {
+                    "kind": "mnist_pattern",
+                    "pattern_index": idx,
+                    "label": label,
+                    "current_threshold_pA": MNIST_PATTERN_CURRENT_THRESHOLD_P_A,
+                },
+            }
+        )
+    return specs
+
+
+def resolve_allowed_senders(
+    pop_spec: dict[str, Any],
+    stim_metadata: dict[str, Any] | None,
+    run_path: Path,
+) -> list[int] | None:
+    filter_info = pop_spec.get("filter")
+    if not filter_info:
+        return None
+    if stim_metadata is None:
+        raise RuntimeError(
+            f"Population '{pop_spec['name']}' requires stimulation metadata, but {run_path} does not contain stimulation_metadata.json"
+        )
+
+    kind = filter_info.get("kind")
+    if kind == "dc_block":
+        dc_meta = stim_metadata.get("dc") or {}
+        blocks = dc_meta.get("blocks", [])
+        label = filter_info.get("label")
+        pattern_idx = filter_info.get("pattern_index")
+        for block in blocks:
+            if block.get("population") != "E":
+                continue
+            if label is not None and block.get("label") != label:
+                continue
+            if label is None and pattern_idx is not None and block.get("pattern_index") != pattern_idx:
+                continue
+            neuron_ids = block.get("neuron_ids") or []
+            return [int(nid) for nid in neuron_ids]
+        print(
+            f"Warning: could not find DC block '{label or pattern_idx}' in stimulation metadata for {run_path}"
+        )
+        return []
+
+    if kind == "mnist_pattern":
+        mnist_meta = stim_metadata.get("mnist") or {}
+        e_meta = mnist_meta.get("E") or {}
+        neuron_ids = e_meta.get("neuron_ids") or []
+        pattern_idx = int(filter_info.get("pattern_index", -1))
+        pattern_currents = e_meta.get("pattern_currents_pA") or []
+        if pattern_idx < 0 or pattern_idx >= len(pattern_currents):
+            print(
+                f"Warning: MNIST pattern index {pattern_idx} missing in stimulation metadata for {run_path}"
+            )
+            return []
+        threshold = float(filter_info.get("current_threshold_pA", 0.0))
+        currents = pattern_currents[pattern_idx]
+        allowed = [
+            int(nid)
+            for nid, curr in zip(neuron_ids, currents)
+            if float(curr) > threshold
+        ]
+        if not allowed:
+            label = filter_info.get("label", pattern_idx)
+            print(
+                f"Warning: MNIST pattern '{label}' has no neurons above threshold in {run_path}"
+            )
+        return allowed
+
+    if kind == "explicit_ids":
+        neuron_ids = filter_info.get("neuron_ids") or []
+        return [int(nid) for nid in neuron_ids]
+
+    raise ValueError(f"Unknown population filter kind: {kind}")
 
 def determine_analysis_windows(cfg_snapshot: dict[str, Any], args: argparse.Namespace) -> list[dict[str, float | str]]:
     exp_cfg = cfg_snapshot.get("experiment", {})
@@ -419,6 +587,7 @@ def resolve_run_path(row: dict[str, Any], sweep_dir: Path) -> Path:
 
 def analyze_run(
     run_path: Path,
+    population_spec: dict[str, Any],
     t_start_ms: float,
     t_stop_override: float | None,
     dt_mr_ms: float,
@@ -432,10 +601,12 @@ def analyze_run(
     pl_min_tail_samples: int,
     pl_require_not_worse: bool,
 ) -> dict[str, float]:
-    cfg, data, _, _ = load_run(run_path)
+    cfg, data, _, _, stim_metadata = load_run(run_path)
     simtime_ms = float(cfg["experiment"]["simtime_ms"])
     t_stop_ms = float(t_stop_override) if t_stop_override is not None else simtime_ms
-    spikes = combine_spikes(data, ["spikes_E", "spikes_IH", "spikes_IA"])
+    spike_keys = population_spec["spike_keys"]
+    allowed_senders = resolve_allowed_senders(population_spec, stim_metadata, run_path)
+    spikes = combine_spikes(data, spike_keys, allowed_senders=allowed_senders)
     times = np.asarray(spikes["times"], float)
     mask = (times >= t_start_ms) & (times < t_stop_ms)
     times = times[mask]
@@ -724,6 +895,7 @@ def analyze_window(
     args: argparse.Namespace,
     dt_mr_ms: float,
     dt_avalanche_override_ms: float | None,
+    population_spec: dict[str, Any],
 ) -> dict[str, Any]:
     window_name = str(window["name"])
     start_ms = float(window["start_ms"])
@@ -735,8 +907,9 @@ def analyze_window(
     }
     analysis_rows: list[dict[str, Any]] = []
 
+    population_label = population_spec["name"]
     print(
-        f"Window '{window_name}': analyzing spikes between {start_ms} ms and {stop_ms} ms"
+        f"Window '{window_name}' [{population_label}]: analyzing spikes between {start_ms} ms and {stop_ms} ms"
     )
 
     for row in summary_rows:
@@ -745,6 +918,7 @@ def analyze_window(
         run_path = resolve_run_path(row, sweep_dir)
         metrics = analyze_run(
             run_path=run_path,
+            population_spec=population_spec,
             t_start_ms=start_ms,
             t_stop_override=stop_ms,
             dt_mr_ms=dt_mr_ms,
@@ -796,7 +970,7 @@ def analyze_window(
         for key in GRID_METRIC_KEYS:
             grids[key][bi, ai] = metrics[key]
         print(
-            f"[{window_name}] alpha={alpha:.2f}, beta={beta:.2f} -> "
+            f"[{window_name} | {population_label}] alpha={alpha:.2f}, beta={beta:.2f} -> "
             f"sigma={metrics['sigma_mr']:.3f}, tau_mr={metrics['tau_mr_ms']:.1f} ms, "
             f"gamma_fit={metrics['gamma_fitted']:.3f}, DCC={metrics['dcc']:.3f}"
         )
@@ -829,6 +1003,15 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
     analysis_base = sweep_dir / "analysis"
     analysis_base.mkdir(parents=True, exist_ok=True)
 
+    sample_metadata = None
+    for row in summary_rows:
+        run_path = resolve_run_path(row, sweep_dir)
+        sample_metadata = load_stimulation_metadata(run_path)
+        if sample_metadata:
+            break
+
+    population_specs = build_population_specs(sample_metadata)
+
     print(f"Analyzing sweep in {sweep_dir}")
     if dt_avalanche_override_ms is not None:
         avalanche_dt_msg = f"{dt_avalanche_override_ms} ms (fixed)"
@@ -838,35 +1021,58 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
     if not POWERLAW_AVAILABLE:
         print("Warning: powerlaw package not installed; DCC exponents will be NaN")
 
-    window_results: dict[str, dict[str, Any]] = {}
-    for window in windows:
-        window_result = analyze_window(
-            summary_rows=summary_rows,
-            sweep_dir=sweep_dir,
-            alpha_index=alpha_index,
-            beta_index=beta_index,
-            alphas=alphas,
-            betas=betas,
-            window=window,
-            args=args,
-            dt_mr_ms=dt_mr_ms,
-            dt_avalanche_override_ms=dt_avalanche_override_ms,
-        )
-        window_results[window_result["name"]] = window_result
+    population_results: dict[str, dict[str, Any]] = {}
+    population_order: list[str] = []
+    for pop_spec in population_specs:
+        pop_folder = pop_spec["folder"]
+        population_order.append(pop_folder)
+        population_root = analysis_base / pop_folder
+        population_root.mkdir(parents=True, exist_ok=True)
 
-        if len(windows) == 1:
-            out_dir = analysis_base
-        else:
-            out_dir = analysis_base / window_result["name"]
-        write_analysis_outputs(window_result, alphas, betas, dt_mr_ms, out_dir, args.disable_plots)
-        print(f"Analysis artifacts saved to {out_dir}")
+        print(f"--- Population: {pop_spec['name']} [{pop_folder}] ---")
+        window_results: dict[str, dict[str, Any]] = {}
+        for window in windows:
+            window_result = analyze_window(
+                summary_rows=summary_rows,
+                sweep_dir=sweep_dir,
+                alpha_index=alpha_index,
+                beta_index=beta_index,
+                alphas=alphas,
+                betas=betas,
+                window=window,
+                args=args,
+                dt_mr_ms=dt_mr_ms,
+                dt_avalanche_override_ms=dt_avalanche_override_ms,
+                population_spec=pop_spec,
+            )
+            window_results[window_result["name"]] = window_result
+
+            if len(windows) == 1:
+                out_dir = population_root
+            else:
+                out_dir = population_root / window_result["name"]
+            write_analysis_outputs(
+                window_result,
+                alphas,
+                betas,
+                dt_mr_ms,
+                out_dir,
+                args.disable_plots,
+            )
+            print(f"Analysis artifacts saved to {out_dir}")
+
+        population_results[pop_folder] = {
+            "name": pop_spec["name"],
+            "windows": window_results,
+        }
 
     return {
         "sweep_dir": sweep_dir,
         "alphas": alphas,
         "betas": betas,
         "dt_mr_ms": dt_mr_ms,
-        "windows": window_results,
+        "population_results": population_results,
+        "population_order": population_order,
         "window_order": [str(w["name"]) for w in windows],
     }
 
@@ -883,6 +1089,7 @@ def aggregate_multi_run_results(
     betas = base["betas"]
     dt_mr_ms = base["dt_mr_ms"]
     window_order = base["window_order"]
+    population_order = base["population_order"]
 
     for res in results[1:]:
         if not np.allclose(res["alphas"], alphas):
@@ -893,28 +1100,45 @@ def aggregate_multi_run_results(
             raise ValueError("MR dt differs across runs; cannot average")
         if res["window_order"] != window_order:
             raise ValueError("Window layouts differ across runs; cannot average")
+        if res["population_order"] != population_order:
+            raise ValueError("Population layouts differ across runs; cannot average")
 
-    aggregated_windows: dict[str, dict[str, Any]] = {}
-    for window_name in window_order:
-        base_window = base["windows"][window_name]
-        aggregated_grids: dict[str, np.ndarray] = {}
-        for key in GRID_METRIC_KEYS:
-            stack = np.stack([res["windows"][window_name]["grids"][key] for res in results], axis=0)
-            aggregated_grids[key] = np.nanmean(stack, axis=0)
+    aggregated_population: dict[str, dict[str, Any]] = {}
+    for pop_name in population_order:
+        base_pop_entry = base["population_results"][pop_name]
+        base_pop_windows = base_pop_entry["windows"]
+        aggregated_windows: dict[str, dict[str, Any]] = {}
+        for window_name in window_order:
+            base_window = base_pop_windows[window_name]
+            aggregated_grids: dict[str, np.ndarray] = {}
+            for key in GRID_METRIC_KEYS:
+                stack = np.stack(
+                    [
+                        res["population_results"][pop_name]["windows"][window_name]["grids"][key]
+                        for res in results
+                    ],
+                    axis=0,
+                )
+                aggregated_grids[key] = np.nanmean(stack, axis=0)
 
-        analysis_rows = build_average_rows(
-            alphas,
-            betas,
-            aggregated_grids,
-            run_label=f"mean_of_{len(results)}_runs",
-            window_name=window_name,
-        )
-        aggregated_windows[window_name] = {
-            "name": window_name,
-            "start_ms": base_window["start_ms"],
-            "stop_ms": base_window["stop_ms"],
-            "grids": aggregated_grids,
-            "analysis_rows": analysis_rows,
+            analysis_rows = build_average_rows(
+                alphas,
+                betas,
+                aggregated_grids,
+                run_label=f"mean_of_{len(results)}_runs",
+                window_name=window_name,
+            )
+            aggregated_windows[window_name] = {
+                "name": window_name,
+                "start_ms": base_window["start_ms"],
+                "stop_ms": base_window["stop_ms"],
+                "grids": aggregated_grids,
+                "analysis_rows": analysis_rows,
+            }
+
+        aggregated_population[pop_name] = {
+            "name": base_pop_entry.get("name", pop_name),
+            "windows": aggregated_windows,
         }
 
     return {
@@ -922,7 +1146,8 @@ def aggregate_multi_run_results(
         "alphas": alphas,
         "betas": betas,
         "dt_mr_ms": dt_mr_ms,
-        "windows": aggregated_windows,
+        "population_results": aggregated_population,
+        "population_order": population_order,
         "window_order": window_order,
     }
 
@@ -953,21 +1178,27 @@ def analyze_multi_run_parent(multi_root: Path, args: argparse.Namespace) -> None
     aggregate_root.mkdir(parents=True, exist_ok=True)
 
     window_order = aggregate_result["window_order"]
-    for window_name in window_order:
-        window_result = aggregate_result["windows"][window_name]
-        if len(window_order) == 1:
-            out_dir = aggregate_root
-        else:
-            out_dir = aggregate_root / window_name
-        write_analysis_outputs(
-            window_result,
-            aggregate_result["alphas"],
-            aggregate_result["betas"],
-            aggregate_result["dt_mr_ms"],
-            out_dir,
-            args.disable_plots,
-        )
-        print(f"Averaged analysis saved to {out_dir}")
+    population_order = aggregate_result["population_order"]
+    for pop_name in population_order:
+        pop_entry = aggregate_result["population_results"][pop_name]
+        pop_label = pop_entry.get("name", pop_name)
+        pop_root = aggregate_root / pop_name
+        pop_root.mkdir(parents=True, exist_ok=True)
+        for window_name in window_order:
+            window_result = pop_entry["windows"][window_name]
+            if len(window_order) == 1:
+                out_dir = pop_root
+            else:
+                out_dir = pop_root / window_name
+            write_analysis_outputs(
+                window_result,
+                aggregate_result["alphas"],
+                aggregate_result["betas"],
+                aggregate_result["dt_mr_ms"],
+                out_dir,
+                args.disable_plots,
+            )
+            print(f"Averaged analysis saved to {out_dir} ({pop_label})")
 
 
 def main() -> None:
