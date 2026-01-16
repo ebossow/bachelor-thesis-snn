@@ -318,7 +318,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mr-dt-ms",
         type=float,
-        default=1,
+        default=4,
         help="Bin width for MR estimator (ms)",
     )
     parser.add_argument(
