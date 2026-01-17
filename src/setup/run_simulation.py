@@ -10,7 +10,7 @@ import time
 class _PlasticityHandle:
     """Store original plasticity parameters to toggle learning on/off."""
 
-    def __init__(self, connections: nest.ConnectionCollection, parameter: str | None):
+    def __init__(self, connections: Any, parameter: str | None):
         self.connections = connections
         self.parameter = parameter
         self._enabled_values: np.ndarray | None = None

@@ -1,0 +1,14 @@
+# .dockerignore
+.git
+.gitignore
+results/
+data/
+venv/
+__pycache__/
+*.npy
+*.npz
+*.pt
+*.log
+.DS_Store
+.env
+.venv
