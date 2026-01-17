@@ -26,10 +26,10 @@ scaling:
 
 network:
   N_E: 80
-  N_IH: 10
-  N_IA_1: 5
-  N_IA_2: 5
-  N_IA: 10
+  N_IH: 20
+  N_IA_1: 0
+  N_IA_2: 0
+  N_IA: 0
 
 neuron_model:
   name: "aeif_psc_exp"
