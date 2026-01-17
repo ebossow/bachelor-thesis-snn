@@ -111,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         default=600.0,
         help="Duration of the post-stimulation frozen phase in seconds (default: 600)",
     )
+    parser.add_argument(
+        "--nest-threads",
+        type=int,
+        help="Override experiment.nest.threads from the config",
+    )
     return parser.parse_args()
 
 
@@ -387,13 +392,13 @@ def main() -> None:
     )
 
     nest_cfg = base_cfg.setdefault("experiment", {}).setdefault("nest", {})
-    if args.num_runs > 1:
+    if args.nest_threads is not None:
         prev_threads = nest_cfg.get("threads")
-        nest_cfg["threads"] = 1
-        if prev_threads not in (None, 1):
+        nest_cfg["threads"] = int(args.nest_threads)
+        if prev_threads not in (None, nest_cfg["threads"]):
             print(
-                f"Parallel multi-run requested: overriding experiment.nest.threads "
-                f"from {prev_threads} to 1"
+                f"Overriding experiment.nest.threads from {prev_threads} "
+                f"to {nest_cfg['threads']} via CLI"
             )
 
     alpha_vals, beta_vals, seeds_per_point = prepare_sweep(base_cfg, args)
