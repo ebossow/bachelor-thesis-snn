@@ -13,6 +13,7 @@ import concurrent.futures as cf
 import csv
 import json
 import os
+from contextlib import nullcontext
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -97,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-workers",
         type=int,
-        help="Maximum concurrent sweeps when running multiple runs",
+        help="Maximum parallel simulation jobs across the alpha/beta grid",
     )
     parser.add_argument(
         "--pre-phase-seconds",
@@ -270,6 +271,10 @@ def iter_grid(alpha_vals: Iterable[float], beta_vals: Iterable[float]):
             yield float(alpha), float(beta)
 
 
+def _run_grid_point(cfg_point: dict, run_dir: str) -> None:
+    run_experiment_with_cfg(cfg_point, Path(run_dir))
+
+
 def run_sweep_instance(
     base_cfg: dict,
     alpha_vals: Sequence[float],
@@ -279,6 +284,7 @@ def run_sweep_instance(
     dry_run: bool,
     seed_offset: int = 0,
     run_label: str | None = None,
+    executor: cf.ProcessPoolExecutor | None = None,
 ) -> Path:
     """Execute a full alpha/beta sweep inside run_root."""
     run_root.mkdir(parents=True, exist_ok=True)
@@ -286,6 +292,7 @@ def run_sweep_instance(
     save_config_snapshot(cfg_template, run_root / "sweep_config_snapshot.yaml")
 
     summary_rows: list[dict] = []
+    jobs: list[tuple[dict, Path, dict]] = []
     base_seed = int(cfg_template["experiment"].get("seed", 0) or 0) + seed_offset
     run_counter = 0
     total_runs = len(alpha_vals) * len(beta_vals) * seeds_per_point
@@ -332,48 +339,51 @@ def run_sweep_instance(
             if dry_run:
                 continue
 
+            jobs.append((cfg_point, run_dir, metadata))
+
+    if dry_run:
+        print(f"{prefix}Dry run completed (no simulations executed).")
+        return run_root
+
+    if not jobs:
+        return run_root
+
+    if executor is None:
+        for cfg_point, run_dir, metadata in jobs:
             try:
-                run_experiment_with_cfg(cfg_point, run_dir)
+                _run_grid_point(cfg_point, str(run_dir))
                 metadata["status"] = "ok"
             except Exception as exc:  # pragma: no cover - runtime failures
                 metadata["status"] = "failed"
                 metadata["error"] = repr(exc)
                 print(
-                    f"{prefix}Run failed for alpha={alpha:.2f}, beta={beta:.2f}: {exc}"
+                    f"{prefix}Run failed for alpha={metadata['alpha']:.2f}, "
+                    f"beta={metadata['beta']:.2f}: {exc}"
                 )
-
+            summary_rows.append(metadata)
+    else:
+        future_to_metadata = {
+            executor.submit(_run_grid_point, cfg_point, str(run_dir)): metadata
+            for cfg_point, run_dir, metadata in jobs
+        }
+        for future in cf.as_completed(future_to_metadata):
+            metadata = future_to_metadata[future]
+            try:
+                future.result()
+                metadata["status"] = "ok"
+            except Exception as exc:  # pragma: no cover - runtime failures
+                metadata["status"] = "failed"
+                metadata["error"] = repr(exc)
+                print(
+                    f"{prefix}Run failed for alpha={metadata['alpha']:.2f}, "
+                    f"beta={metadata['beta']:.2f}: {exc}"
+                )
             summary_rows.append(metadata)
 
-    if not dry_run:
-        summary_path = run_root / "sweep_summary.csv"
-        write_summary(summary_rows, summary_path)
-        print(f"{prefix}Sweep complete. Summary written to {summary_path}")
-    else:
-        print(f"{prefix}Dry run completed (no simulations executed).")
+    summary_path = run_root / "sweep_summary.csv"
+    write_summary(summary_rows, summary_path)
+    print(f"{prefix}Sweep complete. Summary written to {summary_path}")
 
-    return run_root
-
-
-def _run_sweep_worker(
-    run_root: str,
-    base_cfg: dict,
-    alpha_vals: Sequence[float],
-    beta_vals: Sequence[float],
-    seeds_per_point: int,
-    dry_run: bool,
-    seed_offset: int,
-    run_label: str,
-) -> str:
-    run_sweep_instance(
-        base_cfg=base_cfg,
-        alpha_vals=alpha_vals,
-        beta_vals=beta_vals,
-        seeds_per_point=seeds_per_point,
-        run_root=Path(run_root),
-        dry_run=dry_run,
-        seed_offset=seed_offset,
-        run_label=run_label,
-    )
     return run_root
 
 
@@ -406,59 +416,62 @@ def main() -> None:
     beta_list = [float(val) for val in beta_vals]
     runs_per_sweep = len(alpha_list) * len(beta_list) * seeds_per_point
 
-    if args.num_runs == 1:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sweep_root = args.output_root / f"run_{timestamp}"
-        run_sweep_instance(
-            base_cfg=base_cfg,
-            alpha_vals=alpha_list,
-            beta_vals=beta_list,
-            seeds_per_point=seeds_per_point,
-            run_root=sweep_root,
-            dry_run=args.dry_run,
+    worker_limit = max(1, args.max_workers or (os.cpu_count() or 1))
+    if worker_limit > 1:
+        print(f"Using up to {worker_limit} worker processes for grid simulations.")
+
+    executor_context = (
+        cf.ProcessPoolExecutor(max_workers=worker_limit)
+        if worker_limit > 1
+        else nullcontext(None)
+    )
+
+    with executor_context as pool:
+        grid_executor = pool if worker_limit > 1 else None
+
+        if args.num_runs == 1:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            sweep_root = args.output_root / f"run_{timestamp}"
+            run_sweep_instance(
+                base_cfg=base_cfg,
+                alpha_vals=alpha_list,
+                beta_vals=beta_list,
+                seeds_per_point=seeds_per_point,
+                run_root=sweep_root,
+                dry_run=args.dry_run,
+                executor=grid_executor,
+            )
+            return
+
+        multi_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        multi_root = (
+            args.output_root
+            / f"multiple_run_{args.num_runs}_times_{multi_timestamp}"
         )
-        return
+        multi_root.mkdir(parents=True, exist_ok=True)
 
-    multi_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    multi_root = (
-        args.output_root
-        / f"multiple_run_{args.num_runs}_times_{multi_timestamp}"
-    )
-    multi_root.mkdir(parents=True, exist_ok=True)
+        print(
+            f"Executing {args.num_runs} sweeps sequentially in {multi_root}"
+        )
 
-    default_workers = os.cpu_count() or 1
-    max_workers = args.max_workers or default_workers
-    max_workers = max(1, min(max_workers, args.num_runs))
-
-    print(
-        f"Launching {args.num_runs} sweeps into {multi_root} "
-        f"(max_workers={max_workers})"
-    )
-
-    futures: list[cf.Future[str]] = []
-    with cf.ProcessPoolExecutor(max_workers=max_workers) as executor:
         for run_idx in range(args.num_runs):
             run_name = f"run_{run_idx:03d}"
             run_root = multi_root / run_name
             run_root.mkdir(parents=True, exist_ok=True)
             seed_offset = run_idx * runs_per_sweep
             label = f"{run_idx + 1}/{args.num_runs}"
-            future = executor.submit(
-                _run_sweep_worker,
-                str(run_root),
-                base_cfg,
-                alpha_list,
-                beta_list,
-                seeds_per_point,
-                args.dry_run,
-                seed_offset,
-                label,
+            run_sweep_instance(
+                base_cfg=deepcopy(base_cfg),
+                alpha_vals=alpha_list,
+                beta_vals=beta_list,
+                seeds_per_point=seeds_per_point,
+                run_root=run_root,
+                dry_run=args.dry_run,
+                seed_offset=seed_offset,
+                run_label=label,
+                executor=grid_executor,
             )
-            futures.append(future)
-
-        for fut in cf.as_completed(futures):
-            completed_root = fut.result()
-            print(f"Completed sweep at {completed_root}")
+            print(f"Completed sweep at {run_root}")
 
 
 if __name__ == "__main__":
