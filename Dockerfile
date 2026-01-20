@@ -14,4 +14,4 @@ RUN conda install -c conda-forge nest-simulator python=3.12
 RUN pip install -r requirements.txt
 
 ENTRYPOINT ["python", "-m", "scripts.run_factor_sweep"]
-CMD ["--config", "config/full_sim_with_factors.yaml", "--allow-stimulation", "--num-runs", "100", "--nest-threads", "6", "--max-workers", "10", "--pre-phase-seconds", "900000",  "--post-phase-seconds", "900000"]
+CMD ["--config", "config/full_sim_with_factors.yaml", "--allow-stimulation", "--num-runs", "100", "--nest-threads", "6", "--max-workers", "10", "--pre-phase-seconds", "900",  "--post-phase-seconds", "900"]

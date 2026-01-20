@@ -13,7 +13,7 @@ def init_kernel(experiment_cfg: Dict[str, Any]) -> None:
     simtime_ms = experiment_cfg["simtime_ms"]
     nest_cfg = experiment_cfg.get("nest", {})
 
-    resolution = nest_cfg.get("resolution_ms", 0.1)
+    resolution = nest_cfg.get("resolution_ms", 1)
     threads = nest_cfg.get("threads", 1)
     seed = experiment_cfg.get("seed", None)
 
@@ -22,7 +22,7 @@ def init_kernel(experiment_cfg: Dict[str, Any]) -> None:
     nest.SetKernelStatus({
         "resolution": resolution,
         "local_num_threads": threads,
-        "print_time": True,
+        "print_time": False,
     })
 
     if seed is not None:
