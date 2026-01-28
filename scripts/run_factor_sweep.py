@@ -15,6 +15,7 @@ import json
 import os
 from contextlib import nullcontext
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -275,6 +276,33 @@ def _run_grid_point(cfg_point: dict, run_dir: str) -> None:
     run_experiment_with_cfg(cfg_point, Path(run_dir))
 
 
+@dataclass
+class SweepHandle:
+    run_root: Path
+    summary_path: Path
+    future_to_metadata: dict[cf.Future, dict]
+    prefix: str
+    summary_rows: list[dict]
+
+    def finalize(self) -> None:
+        for future in cf.as_completed(self.future_to_metadata):
+            metadata = self.future_to_metadata[future]
+            try:
+                future.result()
+                metadata["status"] = "ok"
+            except Exception as exc:  # pragma: no cover - runtime failures
+                metadata["status"] = "failed"
+                metadata["error"] = repr(exc)
+                print(
+                    f"{self.prefix}Run failed for alpha={metadata['alpha']:.2f}, "
+                    f"beta={metadata['beta']:.2f}: {exc}"
+                )
+            self.summary_rows.append(metadata)
+
+        write_summary(self.summary_rows, self.summary_path)
+        print(f"{self.prefix}Sweep complete. Summary written to {self.summary_path}")
+
+
 def run_sweep_instance(
     base_cfg: dict,
     alpha_vals: Sequence[float],
@@ -285,7 +313,8 @@ def run_sweep_instance(
     seed_offset: int = 0,
     run_label: str | None = None,
     executor: cf.ProcessPoolExecutor | None = None,
-) -> Path:
+    defer_completion: bool = False,
+) -> Path | SweepHandle:
     """Execute a full alpha/beta sweep inside run_root."""
     run_root.mkdir(parents=True, exist_ok=True)
     cfg_template = deepcopy(base_cfg)
@@ -348,6 +377,8 @@ def run_sweep_instance(
     if not jobs:
         return run_root
 
+    summary_path = run_root / "sweep_summary.csv"
+
     if executor is None:
         for cfg_point, run_dir, metadata in jobs:
             try:
@@ -361,26 +392,39 @@ def run_sweep_instance(
                     f"beta={metadata['beta']:.2f}: {exc}"
                 )
             summary_rows.append(metadata)
-    else:
-        future_to_metadata = {
-            executor.submit(_run_grid_point, cfg_point, str(run_dir)): metadata
-            for cfg_point, run_dir, metadata in jobs
-        }
-        for future in cf.as_completed(future_to_metadata):
-            metadata = future_to_metadata[future]
-            try:
-                future.result()
-                metadata["status"] = "ok"
-            except Exception as exc:  # pragma: no cover - runtime failures
-                metadata["status"] = "failed"
-                metadata["error"] = repr(exc)
-                print(
-                    f"{prefix}Run failed for alpha={metadata['alpha']:.2f}, "
-                    f"beta={metadata['beta']:.2f}: {exc}"
-                )
-            summary_rows.append(metadata)
+        write_summary(summary_rows, summary_path)
+        print(f"{prefix}Sweep complete. Summary written to {summary_path}")
+        return run_root
 
-    summary_path = run_root / "sweep_summary.csv"
+    future_to_metadata = {
+        executor.submit(_run_grid_point, cfg_point, str(run_dir)): metadata
+        for cfg_point, run_dir, metadata in jobs
+    }
+    jobs.clear()
+
+    if defer_completion:
+        return SweepHandle(
+            run_root=run_root,
+            summary_path=summary_path,
+            future_to_metadata=future_to_metadata,
+            prefix=prefix,
+            summary_rows=summary_rows,
+        )
+
+    for future in cf.as_completed(future_to_metadata):
+        metadata = future_to_metadata[future]
+        try:
+            future.result()
+            metadata["status"] = "ok"
+        except Exception as exc:  # pragma: no cover - runtime failures
+            metadata["status"] = "failed"
+            metadata["error"] = repr(exc)
+            print(
+                f"{prefix}Run failed for alpha={metadata['alpha']:.2f}, "
+                f"beta={metadata['beta']:.2f}: {exc}"
+            )
+        summary_rows.append(metadata)
+
     write_summary(summary_rows, summary_path)
     print(f"{prefix}Sweep complete. Summary written to {summary_path}")
 
@@ -454,13 +498,16 @@ def main() -> None:
             f"Executing {args.num_runs} sweeps sequentially in {multi_root}"
         )
 
+        defer_multi = grid_executor is not None
+        pending_handles: list[SweepHandle] = []
+
         for run_idx in range(args.num_runs):
             run_name = f"run_{run_idx:03d}"
             run_root = multi_root / run_name
             run_root.mkdir(parents=True, exist_ok=True)
             seed_offset = run_idx * runs_per_sweep
             label = f"{run_idx + 1}/{args.num_runs}"
-            run_sweep_instance(
+            sweep_result = run_sweep_instance(
                 base_cfg=deepcopy(base_cfg),
                 alpha_vals=alpha_list,
                 beta_vals=beta_list,
@@ -470,8 +517,18 @@ def main() -> None:
                 seed_offset=seed_offset,
                 run_label=label,
                 executor=grid_executor,
+                defer_completion=defer_multi,
             )
-            print(f"Completed sweep at {run_root}")
+
+            if isinstance(sweep_result, SweepHandle):
+                pending_handles.append(sweep_result)
+                print(f"Queued sweep at {sweep_result.run_root}")
+            else:
+                print(f"Completed sweep at {sweep_result}")
+
+        for handle in pending_handles:
+            handle.finalize()
+            print(f"Completed sweep at {handle.run_root}")
 
 
 if __name__ == "__main__":
