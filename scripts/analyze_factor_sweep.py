@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
@@ -409,6 +411,14 @@ def parse_args() -> argparse.Namespace:
         default="post_learning",
         help="Name for the post-learning window when --dual-phase is enabled",
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of worker processes used to analyze individual runs; default = CPU count"
+        ),
+    )
 
     args = parser.parse_args()
     if args.mr_fit_start_ms is not None and args.mr_fit_start_ms <= 0.0:
@@ -424,6 +434,8 @@ def parse_args() -> argparse.Namespace:
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
     args.pl_min_samples = max(10, int(args.pl_min_samples))
     args.pl_min_tail_samples = max(10, int(args.pl_min_tail_samples))
+    if args.max_workers is not None and args.max_workers < 1:
+        parser.error("--max-workers must be >= 1")
     return args
 
 
@@ -896,6 +908,7 @@ def analyze_window(
     dt_mr_ms: float,
     dt_avalanche_override_ms: float | None,
     population_spec: dict[str, Any],
+    worker_count: int,
 ) -> dict[str, Any]:
     window_name = str(window["name"])
     start_ms = float(window["start_ms"])
@@ -905,34 +918,39 @@ def analyze_window(
         key: np.full((betas.size, alphas.size), np.nan)
         for key in GRID_METRIC_KEYS
     }
-    analysis_rows: list[dict[str, Any]] = []
+    num_rows = len(summary_rows)
+    worker_count = max(1, min(worker_count, num_rows)) if num_rows else 1
+    analysis_rows_data: list[dict[str, Any] | None] = [None] * num_rows
 
     population_label = population_spec["name"]
     print(
         f"Window '{window_name}' [{population_label}]: analyzing spikes between {start_ms} ms and {stop_ms} ms"
     )
+    if num_rows == 0:
+        return {
+            "name": window_name,
+            "start_ms": start_ms,
+            "stop_ms": stop_ms,
+            "grids": grids,
+            "analysis_rows": [],
+        }
 
-    for row in summary_rows:
-        alpha = float(row["alpha"])
-        beta = float(row["beta"])
-        run_path = resolve_run_path(row, sweep_dir)
-        metrics = analyze_run(
-            run_path=run_path,
-            population_spec=population_spec,
-            t_start_ms=start_ms,
-            t_stop_override=stop_ms,
-            dt_mr_ms=dt_mr_ms,
-            dt_avalanche_override_ms=dt_avalanche_override_ms,
-            min_avalanche_size=int(args.min_avalanche_size),
-            fit_lag_ms_min=args.mr_fit_start_ms,
-            fit_lag_ms_max=args.mr_fit_stop_ms,
-            fit_use_offset=bool(args.mr_fit_use_offset),
-            min_fit_points=int(args.mr_min_fit_points),
-            pl_min_samples=int(args.pl_min_samples),
-            pl_min_tail_samples=int(args.pl_min_tail_samples),
-            pl_require_not_worse=bool(args.pl_require_not_worse),
-        )
+    min_avalanche_size = int(args.min_avalanche_size)
+    fit_lag_ms_min = args.mr_fit_start_ms
+    fit_lag_ms_max = args.mr_fit_stop_ms
+    fit_use_offset = bool(args.mr_fit_use_offset)
+    min_fit_points = int(args.mr_min_fit_points)
+    pl_min_samples = int(args.pl_min_samples)
+    pl_min_tail_samples = int(args.pl_min_tail_samples)
+    pl_require_not_worse = bool(args.pl_require_not_worse)
 
+    def record_result(
+        row_index: int,
+        alpha: float,
+        beta: float,
+        run_name: str | None,
+        metrics: dict[str, float],
+    ) -> None:
         analysis_row = {
             "alpha": alpha,
             "beta": beta,
@@ -960,10 +978,10 @@ def analyze_window(
             "pl_p_duration_lognormal": metrics["pl_p_duration_lognormal"],
             "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
             "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
-            "run_name": row.get("run_name"),
+            "run_name": run_name,
             "window": window_name,
         }
-        analysis_rows.append(analysis_row)
+        analysis_rows_data[row_index] = analysis_row
 
         bi = beta_index[beta]
         ai = alpha_index[alpha]
@@ -975,6 +993,64 @@ def analyze_window(
             f"gamma_fit={metrics['gamma_fitted']:.3f}, DCC={metrics['dcc']:.3f}"
         )
 
+    if worker_count == 1:
+        for row_index, row in enumerate(summary_rows):
+            row_idx, alpha, beta, run_name, metrics = _compute_row_metrics(
+                row_index,
+                row,
+                sweep_dir,
+                population_spec,
+                start_ms,
+                stop_ms,
+                dt_mr_ms,
+                dt_avalanche_override_ms,
+                min_avalanche_size,
+                fit_lag_ms_min,
+                fit_lag_ms_max,
+                fit_use_offset,
+                min_fit_points,
+                pl_min_samples,
+                pl_min_tail_samples,
+                pl_require_not_worse,
+            )
+            record_result(row_idx, alpha, beta, run_name, metrics)
+    else:
+        future_to_row: dict[Any, dict[str, Any]] = {}
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            for row_index, row in enumerate(summary_rows):
+                future = executor.submit(
+                    _compute_row_metrics,
+                    row_index,
+                    row,
+                    sweep_dir,
+                    population_spec,
+                    start_ms,
+                    stop_ms,
+                    dt_mr_ms,
+                    dt_avalanche_override_ms,
+                    min_avalanche_size,
+                    fit_lag_ms_min,
+                    fit_lag_ms_max,
+                    fit_use_offset,
+                    min_fit_points,
+                    pl_min_samples,
+                    pl_min_tail_samples,
+                    pl_require_not_worse,
+                )
+                future_to_row[future] = row
+
+            for future in as_completed(future_to_row):
+                try:
+                    row_idx, alpha, beta, run_name, metrics = future.result()
+                except Exception as exc:  # pragma: no cover - bubble up with context
+                    row = future_to_row[future]
+                    raise RuntimeError(
+                        f"Failed to analyze alpha={row.get('alpha')} beta={row.get('beta')} "
+                        f"(run={row.get('run_name')})"
+                    ) from exc
+                record_result(row_idx, alpha, beta, run_name, metrics)
+
+    analysis_rows = [row for row in analysis_rows_data if row is not None]
     return {
         "name": window_name,
         "start_ms": start_ms,
@@ -1012,6 +1088,15 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
 
     population_specs = build_population_specs(sample_metadata)
 
+    preferred_workers = args.max_workers if args.max_workers is not None else (os.cpu_count() or 1)
+    worker_count = max(1, preferred_workers)
+    if summary_rows:
+        worker_count = min(worker_count, len(summary_rows))
+    if worker_count > 1:
+        print(f"Run-level analysis will use {worker_count} worker processes")
+    else:
+        print("Run-level analysis will execute sequentially (worker count = 1)")
+
     print(f"Analyzing sweep in {sweep_dir}")
     if dt_avalanche_override_ms is not None:
         avalanche_dt_msg = f"{dt_avalanche_override_ms} ms (fixed)"
@@ -1044,6 +1129,7 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
                 dt_mr_ms=dt_mr_ms,
                 dt_avalanche_override_ms=dt_avalanche_override_ms,
                 population_spec=pop_spec,
+                worker_count=worker_count,
             )
             window_results[window_result["name"]] = window_result
 
@@ -1075,6 +1161,47 @@ def analyze_sweep_dir(sweep_dir: Path, args: argparse.Namespace) -> dict[str, An
         "population_order": population_order,
         "window_order": [str(w["name"]) for w in windows],
     }
+
+
+def _compute_row_metrics(
+    row_index: int,
+    row: dict[str, Any],
+    sweep_dir: Path,
+    population_spec: dict[str, Any],
+    start_ms: float,
+    stop_ms: float,
+    dt_mr_ms: float,
+    dt_avalanche_override_ms: float | None,
+    min_avalanche_size: int,
+    fit_lag_ms_min: float | None,
+    fit_lag_ms_max: float | None,
+    fit_use_offset: bool,
+    min_fit_points: int,
+    pl_min_samples: int,
+    pl_min_tail_samples: int,
+    pl_require_not_worse: bool,
+) -> tuple[int, float, float, str | None, dict[str, float]]:
+    run_path = resolve_run_path(row, sweep_dir)
+    metrics = analyze_run(
+        run_path=run_path,
+        population_spec=population_spec,
+        t_start_ms=start_ms,
+        t_stop_override=stop_ms,
+        dt_mr_ms=dt_mr_ms,
+        dt_avalanche_override_ms=dt_avalanche_override_ms,
+        min_avalanche_size=min_avalanche_size,
+        fit_lag_ms_min=fit_lag_ms_min,
+        fit_lag_ms_max=fit_lag_ms_max,
+        fit_use_offset=fit_use_offset,
+        min_fit_points=min_fit_points,
+        pl_min_samples=pl_min_samples,
+        pl_min_tail_samples=pl_min_tail_samples,
+        pl_require_not_worse=pl_require_not_worse,
+    )
+    alpha = float(row["alpha"])
+    beta = float(row["beta"])
+    run_name = row.get("run_name")
+    return row_index, alpha, beta, run_name, metrics
 
 
 def aggregate_multi_run_results(
