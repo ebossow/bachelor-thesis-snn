@@ -4,6 +4,7 @@ from typing import Dict, Any
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 # ---------------------------------------------------------------------------
@@ -12,7 +13,8 @@ import matplotlib.pyplot as plt
 
 def plot_spike_raster_ax(ax: plt.Axes,
                          data: Dict[str, Any],
-                         cfg: Dict[str, Any]) -> None:
+                         cfg: Dict[str, Any],
+                         max_time_ms: float | None = None) -> None:
     """
     Rasterplot für alle Populationen auf gegebener Axes.
     Erwartet data["spikes_E"], data["spikes_IH"], data["spikes_IA"]
@@ -49,21 +51,25 @@ def plot_spike_raster_ax(ax: plt.Axes,
         senders_I = np.asarray(spikes_IA["senders"])
         ax.scatter(times_I, senders_I - 1, s=4, c="blue", label="IA")
 
-    ax.set_xlim(0, cfg["experiment"]["simtime_ms"])
+    sim_duration = cfg["experiment"]["simtime_ms"]
+    if max_time_ms is not None:
+        sim_duration = min(sim_duration, max_time_ms)
+    ax.set_xlim(0, sim_duration)
     ax.set_ylim(-1, N_total + 1)
     ax.set_xlabel("time (ms)")
     ax.set_ylabel("neuron index")
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper left")
     ax.set_title("Spike raster")
 
 
 def plot_spike_raster(data: Dict[str, Any],
-                      cfg: Dict[str, Any]) -> None:
+                      cfg: Dict[str, Any],
+                      max_time_ms: float | None = None) -> None:
     """
     Wrapper: eigener Plot für das Raster.
     """
     fig, ax = plt.subplots(figsize=(10, 5))
-    plot_spike_raster_ax(ax, data, cfg)
+    plot_spike_raster_ax(ax, data, cfg, max_time_ms=max_time_ms)
     plt.tight_layout()
     plt.show()
 
@@ -88,10 +94,17 @@ def _plot_pdf_ax(ax: plt.Axes,
         ax.set_axis_off()
         return
 
-    ax.hist(vals, bins=bins, density=True)
+    ax.hist(
+        vals,
+        bins=bins,
+        density=True,
+        histtype="step",
+        color="gray",
+        linewidth=1.5,
+    )
     ax.set_xlabel(xlabel)
     ax.set_ylabel("PDF")
-    ax.set_title(title)
+    ax.tick_params(axis="y", left=False, labelleft=False)
 
 
 def plot_pdf_cv_ax(ax: plt.Axes, cv: np.ndarray, bins: int = 50) -> None:
@@ -122,7 +135,7 @@ def plot_pdf_mean_rate_ax(ax: plt.Axes, mean_rates: np.ndarray, bins: int = 50) 
     values = np.asarray(mean_rates, float)
     values = values[np.isfinite(values)]  # NaNs rausfiltern
     mu = float(values.mean())
-    print(f"Mean firing rate over neurons: {mu:.3f} Hz")
+    #print(f"Mean firing rate over neurons: {mu:.3f} Hz")
     # vertikale Linie für den Mittelwert
     ax.axvline(mu, color="red", linestyle="--", label=f"mean = {mu:.2f} Hz")
     ax.legend()
@@ -202,17 +215,30 @@ def plot_weight_matrix_ax(
     return im  # Caller can attach a colorbar
 
 
+def add_weight_matrix_colorbar(
+    ax: plt.Axes,
+    im,
+    label: str = "Normalized weight",
+    size: str = "4%",
+    pad: float = 0.05,
+):
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size=size, pad=pad)
+    cbar = ax.figure.colorbar(im, cax=cax)
+    cbar.set_label(label)
+    return cbar
+
+
 def plot_weight_matrix(
     Wn: np.ndarray,
     cfg: Dict[str, Any],
-) -> None:
+ ) -> None:
     """
     Wrapper: eigener Plot für die Weight-Matrix.
     """
     fig, ax = plt.subplots(figsize=(5, 5))
     im = plot_weight_matrix_ax(ax, Wn, cfg)
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label("Normalized weight")
+    add_weight_matrix_colorbar(ax, im)
     plt.tight_layout()
     plt.show()
 
@@ -225,23 +251,14 @@ def plot_weight_matrix(
 def plot_K_ax(ax: plt.Axes,
               K: np.ndarray,
               bins: int = 50) -> None:
-    """
-    PDF der mittleren Gewichtsänderungsrate K(t).
-
-    K : array der K(t)-Werte (z.B. aus mean_weight_change_alltoall)
-    """
-    vals = np.asarray(K, float)
-    vals = vals[np.isfinite(vals)]
-
-    if vals.size == 0:
-        ax.text(0.5, 0.5, "no data", ha="center", va="center")
-        ax.set_axis_off()
-        return
-
-    ax.hist(vals, bins=bins, density=True)
-    ax.set_xlabel("Mean change rate of weights (Hz)")
-    ax.set_ylabel("PDF")
-    ax.set_title("Distribution of mean weight change rate K(t)")
+    """PDF der mittleren Gewichtsänderungsrate K(t)."""
+    _plot_pdf_ax(
+        ax,
+        K,
+        xlabel="Mean change rate of weights (Hz)",
+        title="Distribution of mean weight change rate K(t)",
+        bins=bins,
+    )
 
 
 def plot_K(K: np.ndarray, bins: int = 50) -> None:

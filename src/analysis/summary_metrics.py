@@ -11,6 +11,7 @@ from .metrics import (
     mean_weight_change,
     branching_ratio_neuronwise,
 )
+from .stimulus_groups import extract_stimulus_populations
 from .util import combine_spikes  # falls du so eine helper-Funktion hast
 
 
@@ -18,7 +19,8 @@ def compute_summary_metrics(
     cfg: Dict[str, Any],
     data: Dict[str, Any],
     weights_over_time: Dict[str, Any] | None,
-) -> Dict[str, float]:
+    stim_metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """
     Berechnet alle skalaren Metriken für einen Run.
     Kein Plotten, nur Zahlen.
@@ -114,6 +116,43 @@ def compute_summary_metrics(
     print("Sigma Spike:", sigma_spike, " \n Sigma per neuron: ", sigma_per_neuron) """
 
 
+    stimulus_groups = extract_stimulus_populations(stim_metadata)
+    stimulus_rate_traces: list[Dict[str, Any]] = []
+    if stimulus_groups:
+        for idx, group in enumerate(stimulus_groups):
+            neuron_ids = group.get("neuron_ids") or []
+            if not neuron_ids:
+                continue
+
+            spikes_subset = combine_spikes(
+                data,
+                ["spikes_E", "spikes_IH", "spikes_IA"],
+                allowed_senders=neuron_ids,
+            )
+            pop_times = spikes_subset["times"]
+            pop_senders = spikes_subset["senders"]
+            mask_pop = (pop_times >= t_off_ms) & (pop_times <= simtime_ms)
+            pop_times_post = pop_times[mask_pop]
+            pop_senders_post = pop_senders[mask_pop]
+
+            rates_pop, t_bins_pop, _, _ = instantaneous_rates(
+                pop_times_post,
+                pop_senders_post,
+                N_population=len(neuron_ids),
+                t_start=t_off_ms,
+                t_stop=simtime_ms,
+                bin_size_ms=50.0,
+            )
+            pop_rate_trace = population_rate(rates_pop)
+            stimulus_rate_traces.append(
+                {
+                    "label": group.get("display_label") or group.get("label") or f"P{idx + 1}",
+                    "neuron_ids": neuron_ids,
+                    "time_ms": t_bins_pop,
+                    "rate_Hz": pop_rate_trace,
+                }
+            )
+
     return {
         "mean_rate_Hz": mean_rate,
         "mean_cv": mean_cv,
@@ -124,4 +163,5 @@ def compute_summary_metrics(
         "cv_N": cv_N,
         "mean_rates_per_neuron": mean_rates_per_neuron,
         "R": R_all,
+        "stimulus_rate_traces": stimulus_rate_traces,
     }

@@ -64,8 +64,13 @@ def main():
     runs = load_sweep_rows(sweep_root)
 
     for run_dir, row in runs:
-        cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
-        metrics = compute_summary_metrics(cfg, data, weights_over_time)
+        cfg, data, weights_data, weights_over_time, stim_metadata = load_run(run_dir)
+        metrics = compute_summary_metrics(
+            cfg,
+            data,
+            weights_over_time,
+            stim_metadata=stim_metadata,
+        )
 
         fig = create_summary_figure(cfg, data, metrics, weights_data)
 

@@ -86,7 +86,7 @@ synapses:
       std: 0.2
       lower_rel: 0.0
   weight_decay:
-    enabled: false
+    enabled: true
     decay_factor: 1
     decay_summand: 0
     chunk_ms: 100.0

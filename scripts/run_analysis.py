@@ -45,8 +45,8 @@ def main():
         run_dir = find_latest_run_dir(results_root)
         print(f"Using latest run directory: {run_dir}")
 
-    cfg, data, weights_data, weights_over_time, _ = load_run(run_dir)
-    metrics = compute_summary_metrics(cfg, data, weights_over_time)
+    cfg, data, weights_data, weights_over_time, stim_metadata = load_run(run_dir)
+    metrics = compute_summary_metrics(cfg, data, weights_over_time, stim_metadata=stim_metadata)
     if args.animation:
         #plot_population_activity_interactive(cfg, data, bin_size_ms=50.0) # animation with fire rates
         plot_population_spikes_interactive(cfg, data, bin_size_ms=50.0) # animation with spikes
