@@ -109,12 +109,13 @@ def _plot_stimulus_rate_distribution(
         max_density = 1.0
     ax.set_ylim(0.0, max_density * 1.2)
 
-    ax.set_title("Stimulus population rate distributions")
+    #ax.set_title("Stimulus population rate distributions")
     ax.set_xlabel("Mean firing rate (Hz)")
     ax.set_ylabel("PDF")
     ax.set_xlim(left=0.0)
 
-    if legend_handles:
+    add_labels = False
+    if legend_handles and add_labels:
         ax.legend(handles=legend_handles, loc="upper right", fontsize=8)
 
 

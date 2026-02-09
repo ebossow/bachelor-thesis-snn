@@ -1,9 +1,10 @@
 from pathlib import Path
 import argparse
 import matplotlib
+import matplotlib.image as mpimg
 
 from src.analysis.summary_metrics import compute_summary_metrics
-from src.analysis.summary_figure import create_summary_figure
+from src.analysis.summary_figure import create_summary_figure, _plot_stimulus_rate_distribution
 from src.analysis.metrics import build_weight_matrix, normalize_weight_matrix
 from src.analysis.plotting import (
     plot_spike_raster_ax,
@@ -77,14 +78,35 @@ def parse_args():
         "--output-pdf",
         dest="output_pdf",
         action="store_true",
-        help="Write individual PDF files for each summary subplot (implies no combined summary figure).",
+        help=(
+            "Write individual PDF files for each summary subplot (implies no combined summary figure). "
+            "Requires --generate_plots."
+        ),
     )
     parser.add_argument(
         "--short_raster",
         action="store_true",
         help="Cut spike raster plots at 50,000 ms to focus on early activity.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--generate_plots",
+        action="store_true",
+        help="Enable generation of individual subplot PDF files when combined with --output_pdf.",
+    )
+    parser.add_argument(
+        "--print_comparison",
+        "--print-comparison",
+        dest="print_comparison",
+        action="store_true",
+        help=(
+            "Generate a comparison figure showing the original raster/weight plots "
+            "versus the current run's outputs."
+        ),
+    )
+    args = parser.parse_args()
+    if args.output_pdf and not args.generate_plots:
+        parser.error("--generate_plots must be specified when using --output_pdf")
+    return args
 
 
 def resolve_run_directory(run_dir_arg: str | None) -> Path:
@@ -123,10 +145,82 @@ def create_statistical_metrics_figure(metrics):
 
     plot_pdf_cv_ax(ax_cv, metrics["cv_N"])
     plot_pdf_R_ax(ax_R, metrics["R"])
-    plot_pdf_mean_rate_ax(ax_rate, metrics["mean_rates_per_neuron"])
+    stimulus_traces = metrics.get("stimulus_rate_traces") or []
+    if stimulus_traces:
+        _plot_stimulus_rate_distribution(ax_rate, stimulus_traces)
+    else:
+        plot_pdf_mean_rate_ax(ax_rate, metrics["mean_rates_per_neuron"])
     plot_K_ax(ax_K, metrics["K_post"])
 
     fig.tight_layout(w_pad=1.5)
+    return fig
+
+
+def create_comparison_figure(
+    cfg,
+    data,
+    normalized_W,
+    max_raster_time_ms: float | None,
+    original_raster_path: Path,
+    original_weight_path: Path,
+):
+    if not original_raster_path.exists():
+        raise FileNotFoundError(
+            f"Original raster plot not found at {original_raster_path}"
+        )
+    if not original_weight_path.exists():
+        raise FileNotFoundError(
+            f"Original weight matrix plot not found at {original_weight_path}"
+        )
+
+    orig_raster_img = mpimg.imread(original_raster_path)
+    orig_weight_img = mpimg.imread(original_weight_path)
+
+    fig = plt.figure(figsize=(14, 5))
+    gs = fig.add_gridspec(
+        2,
+        2,
+        width_ratios=(6, 1),
+        height_ratios=(1, 0.5),
+        wspace=0.15,
+        hspace=0.3,
+    )
+
+    ax_orig_raster = fig.add_subplot(gs[0, 0])
+    ax_orig_raster.imshow(orig_raster_img)
+    ax_orig_raster.set_title("Original Raster", fontsize=12)
+    ax_orig_raster.axis("off")
+
+    ax_orig_weight = fig.add_subplot(gs[0, 1])
+    ax_orig_weight.imshow(orig_weight_img)
+    ax_orig_weight.set_title("Original Weight Matrix", fontsize=12)
+    ax_orig_weight.axis("off")
+
+    ax_model_raster = fig.add_subplot(gs[1, 0])
+    plot_spike_raster_ax(ax_model_raster, data, cfg, max_time_ms=max_raster_time_ms)
+    ax_model_raster.set_title("Replication Raster", fontsize=12)
+
+    ax_model_weight = fig.add_subplot(gs[1, 1])
+    im = plot_weight_matrix_ax(ax_model_weight, normalized_W, cfg)
+    ax_model_weight.set_title("Replication Weight Matrix", fontsize=12)
+    add_weight_matrix_colorbar(ax_model_weight, im)
+
+    for ax, label in zip(
+        [ax_orig_raster, ax_orig_weight, ax_model_raster, ax_model_weight],
+        ("A", "B", "C", "D"),
+    ):
+        bbox = ax.get_position()
+        fig.text(
+            bbox.x0 - 0.03,
+            bbox.y1 + 0.05,
+            label,
+            fontsize=14,
+            fontweight="bold",
+            va="bottom",
+            ha="left",
+        )
+
+    fig.tight_layout()
     return fig
 
 
@@ -155,7 +249,11 @@ def create_summary_component_figures(
     figures.append(("pdf_R", fig_R))
 
     fig_rate, ax_rate = plt.subplots(figsize=(4.5, 3.5))
-    plot_pdf_mean_rate_ax(ax_rate, metrics["mean_rates_per_neuron"])
+    stimulus_traces = metrics.get("stimulus_rate_traces") or []
+    if stimulus_traces:
+        _plot_stimulus_rate_distribution(ax_rate, stimulus_traces)
+    else:
+        plot_pdf_mean_rate_ax(ax_rate, metrics["mean_rates_per_neuron"])
     fig_rate.tight_layout()
     figures.append(("pdf_mean_rate", fig_rate))
 
@@ -177,7 +275,7 @@ def save_figures(figures, output_dir: Path, file_format: str):
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, fig in figures:
         target = output_dir / f"{name}.{file_format}"
-        fig.savefig(target, format=file_format)
+        fig.savefig(target, format=file_format, bbox_inches="tight")
         print(f"Saved {target}")
         plt.close(fig)
 
@@ -245,6 +343,18 @@ def main():
         add_weight_matrix_colorbar(ax_w, im)
         fig_w.tight_layout()
         figures.append(("weight_matrix", fig_w))
+
+    if args.print_comparison:
+        original_plots_dir = Path("results") / "plots" / "original_plots"
+        comparison_fig = create_comparison_figure(
+            cfg,
+            data,
+            normalized_W,
+            max_raster_time_ms=raster_limit,
+            original_raster_path=original_plots_dir / "orig_raster.jpeg",
+            original_weight_path=original_plots_dir / "orig_W.jpeg",
+        )
+        figures.append(("comparison", comparison_fig))
 
     if args.save_plots:
         output_dir = Path("results") / "plots" / run_dir.name

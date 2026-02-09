@@ -29,6 +29,18 @@ def _resolve_snapshot_times(cfg: Dict[str, Any]) -> list[float]:
             if isinstance(val, (int, float)):
                 times.add(float(val))
 
+    syn_cfg = cfg.get("synapses", {})
+    weight_decay_cfg = syn_cfg.get("weight_decay", {}) if isinstance(syn_cfg, dict) else {}
+    decay_enabled = bool(weight_decay_cfg.get("enabled", False))
+    post_interval_ms = 100.0
+    if pattern_cfg.get("t_off_ms") is not None:
+        t_off = float(pattern_cfg["t_off_ms"])
+        if t_off < total_ms:
+            current = max(t_off, 0.0)
+            while current <= total_ms:
+                times.add(round(current, 6))
+                current += post_interval_ms
+
     snapshot_times = sorted(t for t in times if 0.0 <= t <= total_ms)
     return snapshot_times
 

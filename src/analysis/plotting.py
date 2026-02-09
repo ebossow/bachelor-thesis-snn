@@ -29,35 +29,43 @@ def plot_spike_raster_ax(ax: plt.Axes,
     spikes_IH = data.get("spikes_IH")
     spikes_IA = data.get("spikes_IA")
 
+    ms_to_s = 0.001
+
     if spikes_E is not None:
-        times_E = np.asarray(spikes_E["times"])
+        times_E = np.asarray(spikes_E["times"], dtype=float) * ms_to_s
         senders_E = np.asarray(spikes_E["senders"])
-        ax.scatter(times_E, senders_E - 1, s=4, c="red", label="E")
+        ax.scatter(times_E, senders_E - 1, s=1, c="red", label="E")
 
     if spikes_IH is not None and spikes_IA is not None:
         times_I = np.concatenate(
-            (np.asarray(spikes_IH["times"]), np.asarray(spikes_IA["times"]))
-        )
+            (
+                np.asarray(spikes_IH["times"], dtype=float),
+                np.asarray(spikes_IA["times"], dtype=float),
+            )
+        ) * ms_to_s
         senders_I = np.concatenate(
             (np.asarray(spikes_IH["senders"]), np.asarray(spikes_IA["senders"]))
         )
-        ax.scatter(times_I, senders_I - 1, s=4, c="blue", label="IH+IA")
+        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IH+IA")
     elif spikes_IH is not None:
-        times_I = np.asarray(spikes_IH["times"])
+        times_I = np.asarray(spikes_IH["times"], dtype=float) * ms_to_s
         senders_I = np.asarray(spikes_IH["senders"])
-        ax.scatter(times_I, senders_I - 1, s=4, c="blue", label="IH")
+        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IH")
     elif spikes_IA is not None:
-        times_I = np.asarray(spikes_IA["times"])
+        times_I = np.asarray(spikes_IA["times"], dtype=float) * ms_to_s
         senders_I = np.asarray(spikes_IA["senders"])
-        ax.scatter(times_I, senders_I - 1, s=4, c="blue", label="IA")
+        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IA")
 
-    sim_duration = cfg["experiment"]["simtime_ms"]
+    sim_duration_ms = cfg["experiment"]["simtime_ms"]
     if max_time_ms is not None:
-        sim_duration = min(sim_duration, max_time_ms)
-    ax.set_xlim(0, sim_duration)
+        sim_duration_ms = min(sim_duration_ms, max_time_ms)
+    sim_duration_s = sim_duration_ms * ms_to_s
+    ax.set_xlim(0, sim_duration_s)
+    x_ticks = [tick for tick in (0, 5, 40) if tick <= sim_duration_s + 1e-9]
+    ax.set_xticks(x_ticks)
     ax.set_ylim(-1, N_total + 1)
-    ax.set_xlabel("time (ms)")
-    ax.set_ylabel("neuron index")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Neuron index")
     ax.legend(loc="upper left")
     ax.set_title("Spike raster")
 
@@ -202,15 +210,13 @@ def plot_weight_matrix_ax(
         interpolation="nearest",
     )
 
-    ax.set_xlabel("Pre-synaptic neuron index")
-    ax.set_ylabel("Post-synaptic neuron index")
+    ax.set_xlabel("Pre-synaptic \n neuron index")
+    ax.set_ylabel("Post-synaptic \n neuron index")
+    tick_positions = [tick for tick in (0, 40, 80) if tick < N_total]
+    ax.set_xticks(tick_positions)
+    ax.set_yticks(tick_positions)
 
-    # Population boundaries
-    for x in [N_E, N_E + N_IH]:
-        ax.axvline(x - 0.5, color="k", linewidth=1)
-        ax.axhline(x - 0.5, color="k", linewidth=1)
-
-    ax.set_title("Normalized weight matrix")
+    #ax.set_title("Normalized weight matrix")
 
     return im  # Caller can attach a colorbar
 
@@ -218,14 +224,16 @@ def plot_weight_matrix_ax(
 def add_weight_matrix_colorbar(
     ax: plt.Axes,
     im,
-    label: str = "Normalized weight",
+    #label: str = "Normalized weight",
     size: str = "4%",
     pad: float = 0.05,
 ):
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size=size, pad=pad)
     cbar = ax.figure.colorbar(im, cax=cax)
-    cbar.set_label(label)
+    cbar.set_ticks([-1, 0, 1])
+    cbar.set_ticklabels(["-1", "0", "1"])
+    #cbar.set_label(label)
     return cbar
 
 
