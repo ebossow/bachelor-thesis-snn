@@ -10,10 +10,12 @@ from src.analysis.plotting import (
     plot_spike_raster_ax,
     plot_weight_matrix_ax,
     plot_pdf_cv_ax,
-    plot_pdf_R_ax,
     plot_pdf_mean_rate_ax,
     plot_K_ax,
     add_weight_matrix_colorbar,
+    plot_kuramoto_traces_ax,
+    plot_kuramoto_pdf_multi_ax,
+    plot_weight_change_pdf_multi_ax,
 )
 from src.analysis.util import load_run, find_latest_run_dir
 
@@ -144,7 +146,8 @@ def create_statistical_metrics_figure(metrics):
     ax_cv, ax_R, ax_rate, ax_K = axes
 
     plot_pdf_cv_ax(ax_cv, metrics["cv_N"])
-    plot_pdf_R_ax(ax_R, metrics["R"])
+    kuramoto_traces = metrics.get("kuramoto_traces") or []
+    plot_kuramoto_traces_ax(ax_R, kuramoto_traces)
     stimulus_traces = metrics.get("stimulus_rate_traces") or []
     if stimulus_traces:
         _plot_stimulus_rate_distribution(ax_rate, stimulus_traces)
@@ -224,6 +227,100 @@ def create_comparison_figure(
     return fig
 
 
+def create_metrics_comparison_figure(metrics, original_plots_dir: Path):
+    required = {
+        "cv": original_plots_dir / "orig_cv.jpeg",
+        "R": original_plots_dir / "orig_R.jpeg",
+        "mean_rate": original_plots_dir / "orig_mean_firing_rate.jpeg",
+        "K": original_plots_dir / "orig_mean_weight_change.jpeg",
+    }
+    missing = [str(path) for path in required.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Missing original metric plots: " + ", ".join(missing)
+        )
+
+    def _plot_mean_rate(ax):
+        stimulus_traces = metrics.get("stimulus_rate_traces") or []
+        if stimulus_traces:
+            _plot_stimulus_rate_distribution(ax, stimulus_traces)
+        else:
+            plot_pdf_mean_rate_ax(ax, metrics["mean_rates_per_neuron"])
+
+    weight_change_traces = metrics.get("weight_change_traces") or []
+    def _plot_K(ax):
+        plot_weight_change_pdf_multi_ax(ax, weight_change_traces[:3])
+
+    figure_rows = [
+        (
+            "Coefficient of Variation",
+            required["cv"],
+            lambda ax: plot_pdf_cv_ax(ax, metrics["cv_N"]),
+            "Replication Coefficient of Variation",
+        ),
+        (
+            "Kuramoto Order Parameter",
+            required["R"],
+            lambda ax: plot_kuramoto_pdf_multi_ax(
+                ax,
+                (metrics.get("kuramoto_traces") or [])[:3],
+            ),
+            "Replication Kuramoto Order Parameter",
+        ),
+        (
+            "Mean Firing Rate",
+            required["mean_rate"],
+            _plot_mean_rate,
+            "Replication Mean Firing Rate",
+        ),
+        (
+            "Mean Change Rate of Weights",
+            required["K"],
+            _plot_K,
+            "Replication Mean Change Rate of Weights ",
+        ),
+    ]
+
+    fig = plt.figure(figsize=(11.0, 14))
+    gs = fig.add_gridspec(
+        len(figure_rows),
+        2,
+        width_ratios=(1.15, 0.75),
+        height_ratios=[1] * len(figure_rows),
+        hspace=0.5,
+        wspace=0.25,
+    )
+
+    axes_for_labels = []
+    for row_idx, (title, img_path, plot_fn, replication_title) in enumerate(figure_rows):
+        ax_orig = fig.add_subplot(gs[row_idx, 0])
+        ax_orig.imshow(mpimg.imread(img_path))
+        ax_orig.set_title(f"Original {title}", fontsize=12)
+        ax_orig.axis("off")
+        axes_for_labels.append(ax_orig)
+
+        ax_model = fig.add_subplot(gs[row_idx, 1])
+        plot_fn(ax_model)
+        ax_model.set_title(replication_title, fontsize=12)
+        axes_for_labels.append(ax_model)
+
+    for idx, ax in enumerate(axes_for_labels):
+        label = chr(ord("A") + idx)
+        bbox = ax.get_position()
+        fig.text(
+            bbox.x0 - 0.035,
+            bbox.y1 + 0.02,
+            label,
+            fontsize=15,
+            fontweight="bold",
+            va="bottom",
+            ha="left",
+        )
+
+    fig.tight_layout()
+    return fig
+
+
 def create_summary_component_figures(
     cfg,
     data,
@@ -244,7 +341,7 @@ def create_summary_component_figures(
     figures.append(("pdf_cv", fig_cv))
 
     fig_R, ax_R = plt.subplots(figsize=(4.5, 3.5))
-    plot_pdf_R_ax(ax_R, metrics["R"])
+    plot_kuramoto_traces_ax(ax_R, metrics.get("kuramoto_traces") or [])
     fig_R.tight_layout()
     figures.append(("pdf_R", fig_R))
 
@@ -355,6 +452,11 @@ def main():
             original_weight_path=original_plots_dir / "orig_W.jpeg",
         )
         figures.append(("comparison", comparison_fig))
+        comparison_metrics_fig = create_metrics_comparison_figure(
+            metrics,
+            original_plots_dir,
+        )
+        figures.append(("comparison_metrics", comparison_metrics_fig))
 
     if args.save_plots:
         output_dir = Path("results") / "plots" / run_dir.name

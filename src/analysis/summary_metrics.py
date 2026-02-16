@@ -8,7 +8,6 @@ from .metrics import (
     population_rate,
     cv_isi,
     kuramoto_order_parameter,
-    mean_weight_change,
     branching_ratio_neuronwise,
 )
 from .stimulus_groups import extract_stimulus_populations
@@ -77,30 +76,46 @@ def compute_summary_metrics(
         t_eval=t_bins,
     )
     mean_R_all = float(np.nanmean(R_all))
+    kuramoto_traces = [
+        {
+            "label": "Network",
+            "time_ms": t_bins.copy(),
+            "R": R_all,
+        }
+    ]
 
-    # --- Kuramoto R für Subpopulation (z.B. E) ---
-    #TODO: this is not right - subpopoulation is a cluster not E or I
-    R_E, Phi_E = kuramoto_order_parameter(
-        times_E_post,
-        senders_E_post,
-        N_population=N_E,
-        t_eval=t_bins,
-    )
-    mean_R_E = float(np.nanmean(R_E))
-
-    # --- K(t): mean change rate of weights ---
     mean_K = float("nan")
+    K_post = np.array([])
+    weight_change_traces: list[Dict[str, Any]] = []
+    wt = None
+    dW = None
+    dt_sec = None
+    t_mid = None
+    targets = None
     if weights_over_time is not None:
-        wt = weights_over_time["times"]
-        Wt = weights_over_time["weights"]
-        t_mid, K = mean_weight_change(wt, Wt, N_total=N)
-        # nur nach Stimulus-Off
-        mask_K = (t_mid >= t_off_ms) & (t_mid <= simtime_ms)
-        K_post = K[mask_K]
-        if K_post.size > 0:
-            mean_K = float(np.nanmean(K_post))
-    else:
-        K_post = np.array([])
+        wt = np.asarray(weights_over_time["times"], float)
+        Wt = np.asarray(weights_over_time["weights"], float)
+        if wt.size >= 2 and Wt.shape[0] == wt.size:
+            dt_sec = np.diff(wt) / 1000.0
+            dt_sec[dt_sec == 0.0] = 1e-9
+            dW = np.diff(Wt, axis=0)
+            sum_dW = dW.sum(axis=1)
+            norm = float(max(N * (N - 1), 1))
+            K_full = sum_dW / (norm * dt_sec)
+            t_mid = 0.5 * (wt[:-1] + wt[1:])
+            mask_K = (t_mid >= t_off_ms) & (t_mid <= simtime_ms)
+            K_post = K_full[mask_K]
+            if K_post.size > 0:
+                mean_K = float(np.nanmean(K_post))
+            weight_change_traces.append(
+                {
+                    "label": "Network",
+                    "time_ms": t_mid[mask_K],
+                    "K_values": K_post,
+                }
+            )
+            if "targets" in weights_over_time:
+                targets = np.asarray(weights_over_time["targets"], int)
 
     """ # --- Branching Ratio Sigma ---
     sigma_spike, sigma_per_neuron = branching_ratio_neuronwise(
@@ -120,6 +135,7 @@ def compute_summary_metrics(
     stimulus_rate_traces: list[Dict[str, Any]] = []
     if stimulus_groups:
         for idx, group in enumerate(stimulus_groups):
+            cluster_label = f"Cluster {idx + 1}"
             neuron_ids = group.get("neuron_ids") or []
             if not neuron_ids:
                 continue
@@ -146,12 +162,48 @@ def compute_summary_metrics(
             pop_rate_trace = population_rate(rates_pop)
             stimulus_rate_traces.append(
                 {
-                    "label": group.get("display_label") or group.get("label") or f"P{idx + 1}",
+                    "label": cluster_label,
                     "neuron_ids": neuron_ids,
                     "time_ms": t_bins_pop,
                     "rate_Hz": pop_rate_trace,
                 }
             )
+
+            R_pop, _ = kuramoto_order_parameter(
+                pop_times_post,
+                pop_senders_post,
+                N_population=len(neuron_ids),
+                t_eval=t_bins,
+            )
+            kuramoto_traces.append(
+                {
+                    "label": cluster_label,
+                    "time_ms": t_bins.copy(),
+                    "R": R_pop,
+                }
+            )
+
+            if (
+                dW is not None
+                and dt_sec is not None
+                and t_mid is not None
+                and targets is not None
+            ):
+                neuron_ids_arr = np.asarray(neuron_ids, dtype=int)
+                mask_cluster = np.isin(targets, neuron_ids_arr)
+                if np.any(mask_cluster):
+                    subset_sum = dW[:, mask_cluster].sum(axis=1)
+                    norm_subset = float(mask_cluster.sum())
+                    K_cluster = subset_sum / (norm_subset * dt_sec)
+                    mask_interval = (t_mid >= t_off_ms) & (t_mid <= simtime_ms)
+                    weight_change_traces.append(
+                        {
+                            "label": cluster_label,
+                            "time_ms": t_mid[mask_interval],
+                            "K_values": K_cluster[mask_interval],
+                        }
+                    )
+
 
     return {
         "mean_rate_Hz": mean_rate,
@@ -163,5 +215,7 @@ def compute_summary_metrics(
         "cv_N": cv_N,
         "mean_rates_per_neuron": mean_rates_per_neuron,
         "R": R_all,
+        "kuramoto_traces": kuramoto_traces,
+        "weight_change_traces": weight_change_traces,
         "stimulus_rate_traces": stimulus_rate_traces,
     }

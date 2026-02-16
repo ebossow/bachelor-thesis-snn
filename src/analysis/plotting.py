@@ -120,6 +120,14 @@ def plot_pdf_cv_ax(ax: plt.Axes, cv: np.ndarray, bins: int = 50) -> None:
     PDF of CV_i across neurons on given Axes.
     """
     _plot_pdf_ax(ax, cv, xlabel="CV_i", title="Distribution of CV_i", bins=bins)
+    vals = np.asarray(cv, float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size:
+        counts, _ = np.histogram(vals, bins=bins, density=True)
+        if counts.size and np.isfinite(counts).any():
+            max_density = float(np.nanmax(counts))
+            if max_density > 0:
+                ax.set_ylim(0.0, max_density * 2.0)
 
 
 def plot_pdf_R_ax(ax: plt.Axes, R: np.ndarray, bins: int = 50) -> None:
@@ -146,7 +154,211 @@ def plot_pdf_mean_rate_ax(ax: plt.Axes, mean_rates: np.ndarray, bins: int = 50) 
     #print(f"Mean firing rate over neurons: {mu:.3f} Hz")
     # vertikale Linie für den Mittelwert
     ax.axvline(mu, color="red", linestyle="--", label=f"mean = {mu:.2f} Hz")
-    ax.legend()
+    ax.tick_params(axis="y", left=False, labelleft=False)
+    ax.legend(loc="upper left")
+    counts, _ = np.histogram(values, bins=bins, density=True)
+    if counts.size:
+        max_density = float(np.nanmax(counts))
+        if max_density > 0:
+            ax.set_ylim(0.0, max_density * 1.05)
+
+
+def _normalize_cluster_label(label: str) -> str:
+    return "".join(ch for ch in label.lower() if ch.isalnum())
+
+
+_CLUSTER_COLOR_MAP = {
+    "network": ("Network", "#7f7f7f"),
+    "cluster1": ("Cluster 1", "#2ca02c"),
+    "cluster2": ("Cluster 2", "#ff7f0e"),
+}
+
+
+def _resolve_cluster_style(label: str, idx: int) -> tuple[str, str]:
+    norm_label = _normalize_cluster_label(label)
+    for key, (display, color) in _CLUSTER_COLOR_MAP.items():
+        if norm_label.startswith(key):
+            return display, color
+    fallback_colors = ["#7f7f7f", "#2ca02c", "#ff7f0e", "#1f77b4"]
+    color = fallback_colors[idx % len(fallback_colors)]
+    return label, color
+
+
+def plot_kuramoto_traces_ax(ax: plt.Axes, traces, *, max_time_s: float | None = None) -> None:
+    """Plot Kuramoto order parameter traces (overall + subpopulations)."""
+
+    if not traces:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    max_time = 0.0
+    min_time = float("inf")
+    plotted = False
+
+    for idx, trace in enumerate(traces):
+        times = np.asarray(trace.get("time_ms", []), dtype=float) * 0.001
+        values = np.asarray(trace.get("R", []), dtype=float)
+        if times.size == 0 or values.size == 0:
+            continue
+        raw_label = trace.get("label") or f"Trace {idx + 1}"
+        label, color = _resolve_cluster_style(raw_label, idx)
+        ax.plot(times, values, linewidth=1.5, label=label, color=color)
+        max_time = max(max_time, float(times.max()))
+        min_time = min(min_time, float(times.min()))
+        plotted = True
+
+    if not plotted:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    if max_time_s is not None:
+        ax.set_xlim(0.0, max_time_s)
+    else:
+        if not np.isfinite(max_time):
+            max_time = 1.0
+        ax.set_xlim(left=0.0, right=max_time if max_time > 0 else 1.0)
+
+    ax.set_ylim(0.0, 1.05)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Kuramoto R")
+    if len(traces) > 1:
+        ax.legend(loc="upper right", fontsize=8)
+
+
+def plot_kuramoto_pdf_multi_ax(ax: plt.Axes, traces, bins: int = 120) -> None:
+    """Plot PDF distributions of multiple Kuramoto traces on one axis."""
+
+    if not traces:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    plotted = False
+    max_density = 0.0
+
+    for idx, trace in enumerate(traces):
+        values = np.asarray(trace.get("R", []), dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+        raw_label = trace.get("label") or f"Trace {idx + 1}"
+        label, color = _resolve_cluster_style(raw_label, idx)
+        counts, edges, _ = ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            linewidth=1.6,
+            color=color,
+            label=label,
+        )
+        if counts.size:
+            max_density = max(max_density, float(counts.max()))
+
+        mean_val = float(np.nanmean(values)) if values.size else 0.0
+        std_val = float(np.nanstd(values)) if values.size else 0.0
+        ax.axvline(mean_val, color=color, linestyle="--", linewidth=1.1)
+
+        if std_val > 0.0:
+            marker_height = (float(counts.max()) if counts.size else max_density or 1.0) * 1.1
+            max_density = max(max_density, marker_height)
+            ax.errorbar(
+                mean_val,
+                marker_height,
+                xerr=std_val,
+                fmt="o",
+                color=color,
+                markersize=4,
+                markerfacecolor=color,
+                markeredgecolor="white",
+                capsize=4,
+                linewidth=1.0,
+            )
+        plotted = True
+
+    if not plotted:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    ax.set_xlim(0.0, 1.0)
+    if max_density > 0.0:
+        ax.set_ylim(0.0, max_density * 1.2)
+    ax.set_xlabel("Kuramoto R")
+    ax.set_ylabel("PDF")
+    ax.tick_params(axis="y", left=False, labelleft=False)
+    if len(traces) > 1:
+        ax.legend(loc="upper right", fontsize=8)
+
+
+def plot_weight_change_pdf_multi_ax(ax: plt.Axes, traces, bins: int = 80) -> None:
+    """Plot PDF distributions for mean weight change traces (network + clusters)."""
+
+    if not traces:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    plotted = False
+    max_density = 0.0
+
+    for idx, trace in enumerate(traces):
+        values = trace.get("K_values")
+        if values is None:
+            values = trace.get("K")
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+        raw_label = trace.get("label") or f"Trace {idx + 1}"
+        label, color = _resolve_cluster_style(raw_label, idx)
+        counts, edges, _ = ax.hist(
+            values,
+            bins=bins,
+            density=True,
+            histtype="step",
+            linewidth=1.6,
+            color=color,
+            label=label,
+        )
+        if counts.size:
+            max_density = max(max_density, float(counts.max()))
+
+        mean_val = float(np.nanmean(values)) if values.size else 0.0
+        std_val = float(np.nanstd(values)) if values.size else 0.0
+        ax.axvline(mean_val, color=color, linestyle="--", linewidth=1.1)
+
+        if std_val > 0.0:
+            marker_height = (float(counts.max()) if counts.size else max_density or 1.0) * 1.1
+            max_density = max(max_density, marker_height)
+            ax.errorbar(
+                mean_val,
+                marker_height,
+                xerr=std_val,
+                fmt="o",
+                color=color,
+                markersize=4,
+                markerfacecolor=color,
+                markeredgecolor="white",
+                capsize=4,
+                linewidth=1.0,
+            )
+        plotted = True
+
+    if not plotted:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    if max_density > 0.0:
+        ax.set_ylim(0.0, max_density * 1.2)
+    ax.set_xlabel("Mean change rate of weights (Hz)")
+    ax.set_ylabel("PDF")
+    ax.tick_params(axis="y", left=False, labelleft=False)
+    if len(traces) > 1:
+        ax.legend(loc="upper right", fontsize=8)
 
 
 # Wrapper, falls du sie weiterhin einzeln aufrufen willst:

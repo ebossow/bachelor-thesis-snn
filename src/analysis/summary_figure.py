@@ -9,7 +9,7 @@ from matplotlib.lines import Line2D
 from .plotting import (
     plot_spike_raster_ax,
     plot_pdf_cv_ax,
-    plot_pdf_R_ax,
+    plot_kuramoto_traces_ax,
     plot_pdf_mean_rate_ax,
     plot_weight_matrix_ax,
     plot_K_ax,
@@ -24,12 +24,7 @@ def _plot_stimulus_rate_distribution(
 ) -> None:
     """Plot stimulus population PDFs with highlighted mean and std dev."""
 
-    color_cycle = plt.rcParams.get("axes.prop_cycle")
-    colors = (
-        color_cycle.by_key().get("color", ["tab:green", "tab:orange"])
-        if color_cycle
-        else ["tab:green", "tab:orange"]
-    )
+    colors = ["#2ca02c", "#ff7f0e"]
 
     max_rate = 0.0
     for trace in stimulus_rate_traces:
@@ -70,22 +65,6 @@ def _plot_stimulus_rate_distribution(
         ax.axvline(mean_rate, color=color, linestyle="--", linewidth=1.1)
 
         legend_handles.append(Line2D([], [], color=color, linewidth=1.8, label=label))
-        legend_handles.append(
-            Line2D([], [], color=color, linestyle="--", linewidth=1.1, label=f"{label} Mean")
-        )
-        legend_handles.append(
-            Line2D(
-                [],
-                [],
-                color=color,
-                marker="o",
-                linestyle="None",
-                markersize=6,
-                markerfacecolor=color,
-                markeredgecolor="white",
-                label=f"{label} Std Dev",
-            )
-        )
 
         if std_rate > 0.0:
             base_height = count_max if count_max > 0 else (max_density if max_density > 0 else 1.0)
@@ -114,8 +93,7 @@ def _plot_stimulus_rate_distribution(
     ax.set_ylabel("PDF")
     ax.set_xlim(left=0.0)
 
-    add_labels = False
-    if legend_handles and add_labels:
+    if legend_handles:
         ax.legend(handles=legend_handles, loc="upper right", fontsize=8)
 
 
@@ -173,6 +151,7 @@ def create_summary_figure(
 
     cv_N = metrics["cv_N"]
     R = metrics["R"]
+    kuramoto_traces = metrics.get("kuramoto_traces") or []
     mean_rates_per_neuron = metrics["mean_rates_per_neuron"]
     K_post = metrics["K_post"]
     stimulus_rate_traces = metrics.get("stimulus_rate_traces") or []
@@ -180,7 +159,19 @@ def create_summary_figure(
     plot_spike_raster_ax(ax_raster, data, cfg, max_time_ms=max_raster_time_ms)
     ax_raster.set_box_aspect(1 / 3)
     plot_pdf_cv_ax(ax_cv, cv_N)
-    plot_pdf_R_ax(ax_R, R)
+    if kuramoto_traces:
+        plot_kuramoto_traces_ax(ax_R, kuramoto_traces)
+    else:
+        plot_kuramoto_traces_ax(
+            ax_R,
+            [
+                {
+                    "label": "All neurons",
+                    "time_ms": np.arange(R.size),
+                    "R": R,
+                }
+            ],
+        )
     if stimulus_rate_traces:
         _plot_stimulus_rate_distribution(ax_rate, stimulus_rate_traces)
     else:

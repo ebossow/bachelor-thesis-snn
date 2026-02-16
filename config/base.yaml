@@ -86,7 +86,7 @@ synapses:
       std: 0.2
       lower_rel: 0.0
   weight_decay:
-    enabled: true
+    enabled: false
     decay_factor: 1
     decay_summand: 0
     chunk_ms: 100.0
@@ -114,7 +114,7 @@ stimulation:
 
 neuron_excitability:
   enabled: true
-  use_seed: true
+  use_seed: false
   rng_seed: 1001
   mean_offset_pA: 0
   std_pA: 1.5
