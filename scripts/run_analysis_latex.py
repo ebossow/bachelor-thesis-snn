@@ -1,7 +1,9 @@
 from pathlib import Path
 import argparse
+import copy
 import matplotlib
 import matplotlib.image as mpimg
+import numpy as np
 
 from src.analysis.summary_metrics import compute_summary_metrics
 from src.analysis.summary_figure import create_summary_figure, _plot_stimulus_rate_distribution
@@ -105,9 +107,30 @@ def parse_args():
             "versus the current run's outputs."
         ),
     )
+    parser.add_argument(
+        "--pre_stimulus_window_s",
+        type=float,
+        default=5.0,
+        help="Seconds to include before stimulus onset when loading analysis data (default: 5.0).",
+    )
+    parser.add_argument(
+        "--post_stimulus_window_s",
+        type=float,
+        default=20.0,
+        help="Seconds to include after stimulus offset when loading analysis data (default: 20.0).",
+    )
+    parser.add_argument(
+        "--disable_analysis_window",
+        action="store_true",
+        help="Disable stimulus-centered analysis window capping and load full run data.",
+    )
     args = parser.parse_args()
     if args.output_pdf and not args.generate_plots:
         parser.error("--generate_plots must be specified when using --output_pdf")
+    if args.pre_stimulus_window_s < 0.0:
+        parser.error("--pre_stimulus_window_s must be >= 0")
+    if args.post_stimulus_window_s < 0.0:
+        parser.error("--post_stimulus_window_s must be >= 0")
     return args
 
 
@@ -139,6 +162,267 @@ def build_weight_matrices(cfg, weights_data):
         N_total=N_total,
     )
     return normalize_weight_matrix(W, cfg)
+
+
+def resolve_post_learning_interval_ms(cfg) -> tuple[float, float]:
+    exp_cfg = cfg.get("experiment", {})
+    phase_markers = exp_cfg.get("phase_markers_ms") or {}
+
+    start_ms = phase_markers.get("main_end_ms")
+    end_ms = phase_markers.get("post_end_ms")
+    if start_ms is not None and end_ms is not None:
+        start_ms = float(start_ms)
+        end_ms = float(end_ms)
+        if end_ms > start_ms:
+            return start_ms, end_ms
+
+    phase_schedule = exp_cfg.get("phase_schedule") or {}
+    segments = phase_schedule.get("segments") or []
+    for seg in segments:
+        name = str(seg.get("name", "")).lower()
+        if "post" not in name:
+            continue
+        seg_start = seg.get("start_ms")
+        seg_end = seg.get("end_ms")
+        if seg_start is None or seg_end is None:
+            continue
+        seg_start = float(seg_start)
+        seg_end = float(seg_end)
+        if seg_end > seg_start:
+            return seg_start, seg_end
+
+    stim_pattern = cfg.get("stimulation", {}).get("pattern", {})
+    fallback_start = float(stim_pattern.get("t_off_ms", 0.0))
+    fallback_end = float(exp_cfg.get("simtime_ms", fallback_start))
+    if fallback_end <= fallback_start:
+        raise ValueError("Unable to infer a valid post-learning interval from config")
+    return fallback_start, fallback_end
+
+
+def is_long_run(cfg) -> bool:
+    min_long_duration_ms = 15.0 * 60.0 * 1000.0
+    simtime_ms = float(cfg.get("experiment", {}).get("simtime_ms", 0.0))
+    if simtime_ms >= min_long_duration_ms:
+        return True
+
+    min_post_duration_ms = min_long_duration_ms
+    try:
+        post_start_ms, post_end_ms = resolve_post_learning_interval_ms(cfg)
+    except Exception:
+        return False
+    return (post_end_ms - post_start_ms) >= min_post_duration_ms
+
+
+def _slice_spike_population(spikes, start_ms: float, end_ms: float):
+    if spikes is None:
+        return None
+    times = np.asarray(spikes["times"])
+    senders = np.asarray(spikes["senders"])
+    mask = (times >= start_ms) & (times <= end_ms)
+    return {
+        "times": times[mask],
+        "senders": senders[mask],
+    }
+
+
+def _slice_data_window(data, start_ms: float, end_ms: float):
+    return {
+        "spikes_E": _slice_spike_population(data.get("spikes_E"), start_ms, end_ms),
+        "spikes_IH": _slice_spike_population(data.get("spikes_IH"), start_ms, end_ms),
+        "spikes_IA": _slice_spike_population(data.get("spikes_IA"), start_ms, end_ms),
+    }
+
+
+def _slice_weights_window(weights_over_time, start_ms: float, end_ms: float):
+    if weights_over_time is None:
+        return None
+    wt = np.asarray(weights_over_time["times"])
+    Wt = np.asarray(weights_over_time["weights"])
+    mask = (wt >= start_ms) & (wt <= end_ms)
+    sliced = {
+        "times": wt[mask],
+        "weights": Wt[mask],
+    }
+    if "sources" in weights_over_time:
+        sliced["sources"] = weights_over_time["sources"]
+    if "targets" in weights_over_time:
+        sliced["targets"] = weights_over_time["targets"]
+    return sliced
+
+
+def _select_named_traces(traces, include_network: bool, max_clusters: int = 2):
+    network_trace = []
+    cluster_traces = []
+    for trace in traces or []:
+        label = str(trace.get("label", "")).lower()
+        if include_network and label.startswith("network") and not network_trace:
+            network_trace.append(trace)
+        elif label.startswith("cluster"):
+            cluster_traces.append(trace)
+    return network_trace + cluster_traces[:max_clusters]
+
+
+def _plot_trace_lines(ax, traces, value_key: str, ylabel: str):
+    if not traces:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    plotted = False
+    for idx, trace in enumerate(traces):
+        t = np.asarray(trace.get("time_ms", []), dtype=float) * 0.001
+        y = np.asarray(trace.get(value_key, []), dtype=float)
+        if t.size == 0 or y.size == 0:
+            continue
+        label = trace.get("label", f"Trace {idx + 1}")
+        normalized_label = str(label).strip().lower().replace(" ", "")
+        color = None
+        if normalized_label.startswith("network"):
+            color = "#7f7f7f"
+        elif normalized_label.startswith("cluster1"):
+            color = "#ff7f0e"
+        elif normalized_label.startswith("cluster2"):
+            color = "#2ca02c"
+        ax.plot(t, y, linewidth=2.0, label=label, color=color)
+        plotted = True
+
+    if not plotted:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    ax.set_ylabel(ylabel)
+    if len(traces) > 1:
+        ax.legend(loc="upper left", fontsize=8)
+
+
+def create_bergoin_metrics_figure(
+    cfg,
+    data,
+    weights_over_time,
+    stim_metadata,
+    window_start_ms: float,
+    window_end_ms: float,
+):
+    window_data = _slice_data_window(data, window_start_ms, window_end_ms)
+    window_weights = _slice_weights_window(weights_over_time, window_start_ms, window_end_ms)
+
+    cfg_window = copy.deepcopy(cfg)
+    cfg_window.setdefault("analysis", {})["window_ms"] = {
+        "start": float(window_start_ms),
+        "end": float(window_end_ms),
+    }
+    cfg_window["experiment"]["simtime_ms"] = float(window_end_ms)
+    cfg_window.setdefault("stimulation", {}).setdefault("pattern", {})["t_off_ms"] = float(window_start_ms)
+
+    metrics_window = compute_summary_metrics(
+        cfg_window,
+        window_data,
+        window_weights,
+        stim_metadata=stim_metadata,
+    )
+
+    kuramoto_traces = _select_named_traces(
+        metrics_window.get("kuramoto_traces") or [],
+        include_network=True,
+        max_clusters=2,
+    )
+    rate_traces = _select_named_traces(
+        metrics_window.get("stimulus_rate_traces") or [],
+        include_network=False,
+        max_clusters=2,
+    )
+    weight_traces = _select_named_traces(
+        metrics_window.get("weight_change_traces") or [],
+        include_network=False,
+        max_clusters=2,
+    )
+
+    fig = plt.figure(figsize=(12.0, 10.0))
+    gs = fig.add_gridspec(
+        4,
+        2,
+        width_ratios=(3.2, 1.35),
+        height_ratios=(1, 1, 1, 1),
+        wspace=0.15,
+        hspace=0.35,
+    )
+
+    ax_C = fig.add_subplot(gs[0, 0])
+    ax_D = fig.add_subplot(gs[0, 1])
+    ax_E = fig.add_subplot(gs[1, 0])
+    ax_F = fig.add_subplot(gs[1, 1])
+    ax_G = fig.add_subplot(gs[2, 0])
+    ax_H = fig.add_subplot(gs[2, 1])
+    ax_I = fig.add_subplot(gs[3, 0])
+    ax_J = fig.add_subplot(gs[3, 1])
+
+    window_start_s = window_start_ms * 0.001
+    window_end_s = window_end_ms * 0.001
+    shared_ticks = np.linspace(window_start_s, window_end_s, 7)
+
+    plot_spike_raster_ax(ax_C, window_data, cfg_window)
+    ax_C.set_title("Post-learning state")
+
+    _plot_trace_lines(ax_E, kuramoto_traces, value_key="R", ylabel="R")
+    plot_kuramoto_pdf_multi_ax(ax_F, kuramoto_traces)
+
+    _plot_trace_lines(ax_G, rate_traces, value_key="rate_Hz", ylabel="Mean firing rate (Hz)")
+    if rate_traces:
+        _plot_stimulus_rate_distribution(ax_H, rate_traces)
+    else:
+        ax_H.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax_H.set_axis_off()
+
+    _plot_trace_lines(
+        ax_I,
+        weight_traces,
+        value_key="K_values",
+        ylabel="Mean change\nrate of weights (Hz)",
+    )
+    plot_weight_change_pdf_multi_ax(ax_J, weight_traces)
+    plot_pdf_cv_ax(ax_D, metrics_window["cv_N"])
+
+    for ax in (ax_C, ax_E, ax_G, ax_I):
+        ax.set_xlim(window_start_s, window_end_s)
+        ax.set_xticks(shared_ticks)
+
+    for ax in (ax_C, ax_E, ax_G):
+        ax.set_xlabel("")
+        ax.tick_params(axis="x", labelbottom=False)
+    ax_I.set_xlabel("Time (seconds)")
+
+    panel_labels = {
+        ax_C: "C",
+        ax_D: "D",
+        ax_E: "E",
+        ax_F: "F",
+        ax_G: "G",
+        ax_H: "H",
+        ax_I: "I",
+        ax_J: "J",
+    }
+    for ax, label in panel_labels.items():
+        bbox = ax.get_position()
+        fig.text(
+            bbox.x0 - 0.04,
+            bbox.y1 + 0.01,
+            label,
+            fontsize=18,
+            fontweight="bold",
+            va="bottom",
+            ha="left",
+        )
+
+    return fig
+
+
+def save_single_figure_pdf(fig, output_dir: Path, file_name: str):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / f"{file_name}.pdf"
+    fig.savefig(target, format="pdf")
+    print(f"Saved {target}")
+    plt.close(fig)
 
 
 def create_statistical_metrics_figure(metrics):
@@ -392,7 +676,31 @@ def main():
     setup_matplotlib(save_format)
     run_dir = resolve_run_directory(args.run_dir)
 
-    cfg, data, weights_data, weights_over_time, stim_metadata = load_run(run_dir)
+    cfg_full, data_full, weights_data_full, weights_over_time_full, stim_metadata_full = load_run(run_dir)
+    auto_full_analysis = is_long_run(cfg_full)
+
+    if args.disable_analysis_window:
+        cfg, data, weights_data, weights_over_time, stim_metadata = (
+            cfg_full,
+            data_full,
+            weights_data_full,
+            weights_over_time_full,
+            stim_metadata_full,
+        )
+    else:
+        cfg, data, weights_data, weights_over_time, stim_metadata = load_run(
+            run_dir,
+            pre_stimulus_window_ms=args.pre_stimulus_window_s * 1000.0,
+            post_stimulus_window_ms=args.post_stimulus_window_s * 1000.0,
+        )
+
+    if not args.disable_analysis_window and "analysis" in cfg:
+        window = cfg["analysis"].get("window_ms") or {}
+        if window:
+            print(
+                "Applied analysis window "
+                f"[{window['start']:.1f}, {window['end']:.1f}] ms"
+            )
     metrics = compute_summary_metrics(
         cfg,
         data,
@@ -402,6 +710,26 @@ def main():
     normalized_W = build_weight_matrices(cfg, weights_data)
 
     figures = []
+    full_analysis_fig = None
+    if auto_full_analysis:
+        post_start_ms, post_end_ms = resolve_post_learning_interval_ms(cfg_full)
+        window_start_ms = post_start_ms
+        window_end_ms = min(post_end_ms, window_start_ms + 30000.0)
+        if window_end_ms > window_start_ms:
+            print(
+                "Auto full-analysis window "
+                f"[{window_start_ms:.1f}, {window_end_ms:.1f}] ms "
+                f"within post phase [{post_start_ms:.1f}, {post_end_ms:.1f}] ms"
+            )
+            full_analysis_fig = create_bergoin_metrics_figure(
+                cfg_full,
+                data_full,
+                weights_over_time_full,
+                stim_metadata_full,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            )
+
     if args.output_pdf:
         figures = create_summary_component_figures(
             cfg,
@@ -465,6 +793,10 @@ def main():
         save_figures(figures, output_dir, save_format)
     else:
         display_figures(figures)
+
+    if full_analysis_fig is not None:
+        output_dir = Path("results") / "plots" / run_dir.name
+        save_single_figure_pdf(full_analysis_fig, output_dir, "full_analysis")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ def _plot_stimulus_rate_distribution(
 ) -> None:
     """Plot stimulus population PDFs with highlighted mean and std dev."""
 
-    colors = ["#2ca02c", "#ff7f0e"]
+    colors = ["#ff7f0e", "#2ca02c"]
 
     max_rate = 0.0
     for trace in stimulus_rate_traces:

@@ -3,6 +3,7 @@ import numpy as np
 import yaml
 from pathlib import Path
 
+
 def combine_spikes(data, keys, allowed_senders=None):
     times_list = []
     senders_list = []
@@ -36,7 +37,85 @@ def combine_spikes(data, keys, allowed_senders=None):
     senders = np.concatenate(senders_list)
     return {"times": times, "senders": senders}
 
-def load_run(run_dir: Path):
+
+def _resolve_stimulus_window_ms(
+    cfg: dict,
+    stim_metadata: dict | None,
+    pre_stim_ms: float,
+    post_stim_ms: float,
+) -> tuple[float, float] | None:
+    pattern = {}
+    if isinstance(stim_metadata, dict):
+        pattern = stim_metadata.get("pattern") or {}
+
+    cfg_pattern = cfg.get("stimulation", {}).get("pattern", {})
+    t_on_ms = pattern.get("t_on_ms", cfg_pattern.get("t_on_ms"))
+    t_off_ms = pattern.get("t_off_ms", cfg_pattern.get("t_off_ms"))
+
+    if t_on_ms is None or t_off_ms is None:
+        return None
+
+    t_on_ms = float(t_on_ms)
+    t_off_ms = float(t_off_ms)
+    simtime_ms = float(cfg["experiment"]["simtime_ms"])
+
+    start_ms = max(0.0, t_on_ms - float(pre_stim_ms))
+    end_ms = min(simtime_ms, t_off_ms + float(post_stim_ms))
+
+    if end_ms <= start_ms:
+        return None
+    return start_ms, end_ms
+
+
+def _slice_spike_data(
+    data: dict,
+    start_ms: float,
+    end_ms: float,
+) -> dict:
+    sliced = {}
+    for key, spikes in data.items():
+        if spikes is None:
+            sliced[key] = None
+            continue
+        times = np.asarray(spikes["times"])
+        senders = np.asarray(spikes["senders"])
+        mask = (times >= start_ms) & (times <= end_ms)
+        sliced[key] = {
+            "times": times[mask],
+            "senders": senders[mask],
+        }
+    return sliced
+
+
+def _slice_weights_trajectory(
+    weights_over_time: dict | None,
+    start_ms: float,
+    end_ms: float,
+) -> dict | None:
+    if weights_over_time is None:
+        return None
+
+    times = np.asarray(weights_over_time["times"])
+    weights = np.asarray(weights_over_time["weights"])
+    mask = (times >= start_ms) & (times <= end_ms)
+
+    sliced = {
+        "times": times[mask],
+        "weights": weights[mask],
+    }
+    if "sources" in weights_over_time:
+        sliced["sources"] = weights_over_time["sources"]
+    if "targets" in weights_over_time:
+        sliced["targets"] = weights_over_time["targets"]
+    return sliced
+
+
+def load_run(
+    run_dir: Path,
+    *,
+    pre_stimulus_window_ms: float | None = None,
+    post_stimulus_window_ms: float | None = None,
+):
     with (run_dir / "config_resolved.yaml").open("r") as f:
         cfg = yaml.safe_load(f)
 
@@ -77,6 +156,23 @@ def load_run(run_dir: Path):
             weights_over_time["targets"] = d["targets"]
 
     stim_metadata = load_stimulation_metadata(run_dir)
+
+    if pre_stimulus_window_ms is not None and post_stimulus_window_ms is not None:
+        interval = _resolve_stimulus_window_ms(
+            cfg,
+            stim_metadata,
+            pre_stim_ms=pre_stimulus_window_ms,
+            post_stim_ms=post_stimulus_window_ms,
+        )
+        if interval is not None:
+            start_ms, end_ms = interval
+            data = _slice_spike_data(data, start_ms, end_ms)
+            weights_over_time = _slice_weights_trajectory(weights_over_time, start_ms, end_ms)
+            cfg.setdefault("analysis", {})["window_ms"] = {
+                "start": start_ms,
+                "end": end_ms,
+            }
+            cfg["experiment"]["simtime_ms"] = end_ms
 
     return cfg, data, weights_data, weights_over_time, stim_metadata
 

@@ -31,10 +31,12 @@ def plot_spike_raster_ax(ax: plt.Axes,
 
     ms_to_s = 0.001
 
+    point_size = 4.0
+
     if spikes_E is not None:
         times_E = np.asarray(spikes_E["times"], dtype=float) * ms_to_s
         senders_E = np.asarray(spikes_E["senders"])
-        ax.scatter(times_E, senders_E - 1, s=1, c="red", label="E")
+        ax.scatter(times_E, senders_E - 1, s=point_size, c="red", label="E")
 
     if spikes_IH is not None and spikes_IA is not None:
         times_I = np.concatenate(
@@ -46,23 +48,34 @@ def plot_spike_raster_ax(ax: plt.Axes,
         senders_I = np.concatenate(
             (np.asarray(spikes_IH["senders"]), np.asarray(spikes_IA["senders"]))
         )
-        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IH+IA")
+        ax.scatter(times_I, senders_I - 1, s=point_size, c="blue", label="IH+IA")
     elif spikes_IH is not None:
         times_I = np.asarray(spikes_IH["times"], dtype=float) * ms_to_s
         senders_I = np.asarray(spikes_IH["senders"])
-        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IH")
+        ax.scatter(times_I, senders_I - 1, s=point_size, c="blue", label="IH")
     elif spikes_IA is not None:
         times_I = np.asarray(spikes_IA["times"], dtype=float) * ms_to_s
         senders_I = np.asarray(spikes_IA["senders"])
-        ax.scatter(times_I, senders_I - 1, s=1, c="blue", label="IA")
+        ax.scatter(times_I, senders_I - 1, s=point_size, c="blue", label="IA")
 
-    sim_duration_ms = cfg["experiment"]["simtime_ms"]
+    sim_end_ms = cfg["experiment"]["simtime_ms"]
+    sim_start_ms = 0.0
+    analysis_window = cfg.get("analysis", {}).get("window_ms", {})
+    if analysis_window:
+        sim_start_ms = float(analysis_window.get("start", sim_start_ms))
+        sim_end_ms = float(analysis_window.get("end", sim_end_ms))
+
     if max_time_ms is not None:
-        sim_duration_ms = min(sim_duration_ms, max_time_ms)
-    sim_duration_s = sim_duration_ms * ms_to_s
-    ax.set_xlim(0, sim_duration_s)
-    x_ticks = [tick for tick in (0, 5, 40) if tick <= sim_duration_s + 1e-9]
-    ax.set_xticks(x_ticks)
+        sim_end_ms = min(sim_end_ms, max_time_ms)
+
+    if sim_end_ms <= sim_start_ms:
+        sim_start_ms = 0.0
+        sim_end_ms = cfg["experiment"]["simtime_ms"]
+
+    sim_start_s = sim_start_ms * ms_to_s
+    sim_end_s = sim_end_ms * ms_to_s
+    ax.set_xlim(sim_start_s, sim_end_s)
+    ax.set_xticks(np.linspace(sim_start_s, sim_end_s, 5))
     ax.set_ylim(-1, N_total + 1)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Neuron index")
@@ -169,8 +182,8 @@ def _normalize_cluster_label(label: str) -> str:
 
 _CLUSTER_COLOR_MAP = {
     "network": ("Network", "#7f7f7f"),
-    "cluster1": ("Cluster 1", "#2ca02c"),
-    "cluster2": ("Cluster 2", "#ff7f0e"),
+    "cluster1": ("Cluster 1", "#ff7f0e"),
+    "cluster2": ("Cluster 2", "#2ca02c"),
 }
 
 
