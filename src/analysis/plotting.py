@@ -255,7 +255,7 @@ def plot_kuramoto_traces_ax(ax: plt.Axes, traces, *, max_time_s: float | None = 
 
     ax.set_ylim(0.0, 1.05)
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Kuramoto R")
+    ax.set_ylabel("R")
     if len(traces) > 1:
         ax.legend(loc="upper right", fontsize=8)
 
@@ -319,7 +319,7 @@ def plot_kuramoto_pdf_multi_ax(ax: plt.Axes, traces, bins: int = 120) -> None:
     ax.set_xlim(0.0, 1.0)
     if max_density > 0.0:
         ax.set_ylim(0.0, max_density * 1.2)
-    ax.set_xlabel("Kuramoto R")
+    ax.set_xlabel("R")
     ax.set_ylabel("PDF")
     ax.tick_params(axis="y", left=False, labelleft=False)
     if len(traces) > 1:

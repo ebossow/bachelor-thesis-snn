@@ -529,7 +529,7 @@ def create_bergoin_metrics_figure(
         7,
         2,
         width_ratios=(3.2, 1.35),
-        height_ratios=(1.0, 0.18, 1.1, 0.18, 1.0, 1.0, 1.0),
+        height_ratios=(1.0, 0.28, 1.1, 0.28, 1.0, 1.0, 1.0),
         wspace=0.15,
         hspace=0.35,
     )
@@ -545,12 +545,19 @@ def create_bergoin_metrics_figure(
     matrix_axes = [fig.add_subplot(dev_gs[0, col]) for col in (1, 3)]
     arrow_axes = [fig.add_subplot(dev_gs[0, 2])]
 
-    ax_C = fig.add_subplot(gs[4, 0])
-    ax_D = fig.add_subplot(gs[4, 1])
-    ax_E = fig.add_subplot(gs[5, 0])
-    ax_F = fig.add_subplot(gs[5, 1])
-    ax_G = fig.add_subplot(gs[6, 0])
-    ax_H = fig.add_subplot(gs[6, 1])
+    lower_gs = gs[4:, :].subgridspec(
+        3,
+        2,
+        width_ratios=(3.2, 1.35),
+        hspace=0.5,
+        wspace=0.15,
+    )
+    ax_C = fig.add_subplot(lower_gs[0, 0])
+    ax_D = fig.add_subplot(lower_gs[0, 1])
+    ax_E = fig.add_subplot(lower_gs[1, 0])
+    ax_F = fig.add_subplot(lower_gs[1, 1])
+    ax_G = fig.add_subplot(lower_gs[2, 0])
+    ax_H = fig.add_subplot(lower_gs[2, 1])
 
     window_start_s = window_start_ms * 0.001
     window_end_s = window_end_ms * 0.001
@@ -624,6 +631,7 @@ def create_bergoin_metrics_figure(
     _plot_trace_lines(ax_G, rate_traces, value_key="rate_Hz", ylabel="Mean firing rate (Hz)")
     if rate_traces:
         _plot_stimulus_rate_distribution(ax_H, rate_traces)
+        ax_H.tick_params(axis="y", left=False, labelleft=False)
     else:
         ax_H.text(0.5, 0.5, "no data", ha="center", va="center")
         ax_H.set_axis_off()
