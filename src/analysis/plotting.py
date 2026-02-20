@@ -132,7 +132,27 @@ def plot_pdf_cv_ax(ax: plt.Axes, cv: np.ndarray, bins: int = 50) -> None:
     """
     PDF of CV_i across neurons on given Axes.
     """
-    _plot_pdf_ax(ax, cv, xlabel="CV_i", title="Distribution of CV_i", bins=bins)
+    vals = np.asarray(cv, float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    ax.hist(
+        vals,
+        bins=bins,
+        density=True,
+        histtype="step",
+        color="gray",
+        linewidth=1.5,
+        label="Network",
+    )
+    ax.set_xlabel("CV_i")
+    ax.set_ylabel("PDF")
+    ax.tick_params(axis="y", left=False, labelleft=False)
+    ax.legend(loc="upper right", fontsize=8)
+
     vals = np.asarray(cv, float)
     vals = vals[np.isfinite(vals)]
     if vals.size:

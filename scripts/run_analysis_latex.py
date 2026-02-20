@@ -124,6 +124,15 @@ def parse_args():
         action="store_true",
         help="Disable stimulus-centered analysis window capping and load full run data.",
     )
+    parser.add_argument(
+        "--full_analysis_start_s",
+        type=float,
+        default=1550,
+        help=(
+            "Absolute simulation time in seconds where the auto full-analysis 30s window should start. "
+            "If omitted, start of post-learning phase is used."
+        ),
+    )
     args = parser.parse_args()
     if args.output_pdf and not args.generate_plots:
         parser.error("--generate_plots must be specified when using --output_pdf")
@@ -131,6 +140,8 @@ def parse_args():
         parser.error("--pre_stimulus_window_s must be >= 0")
     if args.post_stimulus_window_s < 0.0:
         parser.error("--post_stimulus_window_s must be >= 0")
+    if args.full_analysis_start_s is not None and args.full_analysis_start_s < 0.0:
+        parser.error("--full_analysis_start_s must be >= 0")
     return args
 
 
@@ -296,9 +307,189 @@ def _plot_trace_lines(ax, traces, value_key: str, ylabel: str):
         ax.legend(loc="upper left", fontsize=8)
 
 
+def _build_synchrony_highlights(kuramoto_traces):
+    highlights = []
+    default_half_width_s = 0.4
+
+    for trace in kuramoto_traces or []:
+        label = str(trace.get("label", ""))
+        normalized_label = label.strip().lower().replace(" ", "")
+        if normalized_label.startswith("cluster1"):
+            color = "#ff7f0e"
+            highlight_label = "Cluster 1 Recall"
+        elif normalized_label.startswith("cluster2"):
+            color = "#2ca02c"
+            highlight_label = "Cluster 2 Recall"
+        else:
+            continue
+
+        t = np.asarray(trace.get("time_ms", []), dtype=float) * 0.001
+        r = np.asarray(trace.get("R", []), dtype=float)
+        finite_mask = np.isfinite(t) & np.isfinite(r)
+        if not np.any(finite_mask):
+            continue
+        t = t[finite_mask]
+        r = r[finite_mask]
+        if t.size == 0 or r.size == 0:
+            continue
+
+        peak_idx = int(np.nanargmax(r))
+        peak_t = float(t[peak_idx])
+
+        half_width_s = default_half_width_s
+        if t.size >= 2:
+            dt = float(np.nanmedian(np.diff(t)))
+            if np.isfinite(dt) and dt > 0.0:
+                half_width_s = max(default_half_width_s, 2.0 * dt)
+
+        highlights.append(
+            {
+                "start_s": peak_t - 0.5 * half_width_s,
+                "end_s": peak_t + 0.5 * half_width_s,
+                "color": color,
+                "label": highlight_label,
+            }
+        )
+
+    return highlights
+
+
+def _build_async_irregular_highlight(kuramoto_traces):
+    cluster_1 = None
+    cluster_2 = None
+
+    for trace in kuramoto_traces or []:
+        label = str(trace.get("label", "")).strip().lower().replace(" ", "")
+        if label.startswith("cluster1"):
+            cluster_1 = trace
+        elif label.startswith("cluster2"):
+            cluster_2 = trace
+
+    if cluster_1 is None or cluster_2 is None:
+        return None
+
+    t1 = np.asarray(cluster_1.get("time_ms", []), dtype=float) * 0.001
+    r1 = np.asarray(cluster_1.get("R", []), dtype=float)
+    t2 = np.asarray(cluster_2.get("time_ms", []), dtype=float) * 0.001
+    r2 = np.asarray(cluster_2.get("R", []), dtype=float)
+
+    n = min(t1.size, r1.size, t2.size, r2.size)
+    if n < 3:
+        return None
+
+    t = t1[:n]
+    both_low_score = np.maximum(r1[:n], r2[:n])
+    finite_mask = np.isfinite(t) & np.isfinite(both_low_score)
+    if np.count_nonzero(finite_mask) < 3:
+        return None
+
+    t = t[finite_mask]
+    both_low_score = both_low_score[finite_mask]
+
+    dt = float(np.nanmedian(np.diff(t))) if t.size >= 2 else float("nan")
+    if not np.isfinite(dt) or dt <= 0.0:
+        return None
+
+    target_duration_s = 2.0
+    window_len = max(1, int(round(target_duration_s / dt)))
+    kernel = np.ones(window_len, dtype=float) / float(window_len)
+    smoothed = np.convolve(both_low_score, kernel, mode="valid")
+    if smoothed.size == 0:
+        return None
+
+    best_idx = int(np.nanargmin(smoothed))
+    start_s = float(t[best_idx])
+    end_s = start_s + window_len * dt
+
+    return {
+        "start_s": start_s,
+        "end_s": end_s,
+        "color": "#d8b4d8",
+        "alpha": 0.18,
+        "label": "AI State",
+    }
+
+
+def _resolve_stimulus_focus_window_ms(
+    cfg,
+    *,
+    pre_ms: float = 5000.0,
+    post_ms: float = 20000.0,
+) -> tuple[float, float] | None:
+    stim_pattern = cfg.get("stimulation", {}).get("pattern", {})
+    markers = cfg.get("experiment", {}).get("phase_markers_ms", {})
+
+    t_on_ms = stim_pattern.get("t_on_ms", markers.get("stim_on_ms"))
+    t_off_ms = stim_pattern.get("t_off_ms", markers.get("stim_off_ms"))
+    if t_on_ms is None or t_off_ms is None:
+        return None
+
+    sim_end_ms = float(cfg.get("experiment", {}).get("simtime_ms", 0.0))
+    start_ms = max(0.0, float(t_on_ms) - float(pre_ms))
+    end_ms = min(sim_end_ms, float(t_off_ms) + float(post_ms))
+    if end_ms <= start_ms:
+        return None
+    return start_ms, end_ms
+
+
+def _enable_subplot_box(ax, linewidth: float = 1.0):
+    ax.set_frame_on(True)
+    for side in ("left", "right", "top", "bottom"):
+        spine = ax.spines.get(side)
+        if spine is not None:
+            spine.set_visible(True)
+            spine.set_linewidth(linewidth)
+
+
+def _select_weight_development_snapshots(cfg, weights_over_time):
+    if weights_over_time is None:
+        return []
+
+    times = np.asarray(weights_over_time.get("times", []), dtype=float)
+    if times.size == 0:
+        return []
+
+    exp_cfg = cfg.get("experiment", {})
+    phase_markers = exp_cfg.get("phase_markers_ms") or {}
+    pattern_cfg = cfg.get("stimulation", {}).get("pattern", {})
+
+    target_points = [
+        (pattern_cfg.get("t_on_ms", phase_markers.get("stim_on_ms")), "Pre learning"),
+        (pattern_cfg.get("t_off_ms", phase_markers.get("stim_off_ms")), "After learning"),
+    ]
+
+    selected: list[tuple[int, float, str]] = []
+    used_indices: set[int] = set()
+
+    for target_ms, label in target_points:
+        if target_ms is None:
+            continue
+        idx = int(np.argmin(np.abs(times - float(target_ms))))
+        if idx in used_indices:
+            continue
+        used_indices.add(idx)
+        selected.append((idx, float(times[idx]), label))
+
+    if len(selected) < 2:
+        fallback_indices = [0, times.size - 1]
+        fallback_labels = ["Pre learning", "After learning"]
+        for idx, fallback_label in zip(fallback_indices, fallback_labels):
+            idx = int(idx)
+            if idx in used_indices:
+                continue
+            used_indices.add(idx)
+            selected.append((idx, float(times[idx]), fallback_label))
+            if len(selected) >= 2:
+                break
+
+    selected = sorted(selected, key=lambda item: item[1])
+    return selected[:2]
+
+
 def create_bergoin_metrics_figure(
     cfg,
     data,
+    weights_data,
     weights_over_time,
     stim_metadata,
     window_start_ms: float,
@@ -332,37 +523,100 @@ def create_bergoin_metrics_figure(
         include_network=False,
         max_clusters=2,
     )
-    weight_traces = _select_named_traces(
-        metrics_window.get("weight_change_traces") or [],
-        include_network=False,
-        max_clusters=2,
-    )
 
-    fig = plt.figure(figsize=(12.0, 10.0))
+    fig = plt.figure(figsize=(14.0, 13.5))
     gs = fig.add_gridspec(
-        4,
+        7,
         2,
         width_ratios=(3.2, 1.35),
-        height_ratios=(1, 1, 1, 1),
+        height_ratios=(1.0, 0.18, 1.1, 0.18, 1.0, 1.0, 1.0),
         wspace=0.15,
         hspace=0.35,
     )
 
-    ax_C = fig.add_subplot(gs[0, 0])
-    ax_D = fig.add_subplot(gs[0, 1])
-    ax_E = fig.add_subplot(gs[1, 0])
-    ax_F = fig.add_subplot(gs[1, 1])
-    ax_G = fig.add_subplot(gs[2, 0])
-    ax_H = fig.add_subplot(gs[2, 1])
-    ax_I = fig.add_subplot(gs[3, 0])
-    ax_J = fig.add_subplot(gs[3, 1])
+    ax_A = fig.add_subplot(gs[0, :])
+
+    dev_gs = gs[2, :].subgridspec(
+        1,
+        5,
+        width_ratios=(0.7, 1.0, 0.08, 1.0, 0.7),
+        wspace=0.0,
+    )
+    matrix_axes = [fig.add_subplot(dev_gs[0, col]) for col in (1, 3)]
+    arrow_axes = [fig.add_subplot(dev_gs[0, 2])]
+
+    ax_C = fig.add_subplot(gs[4, 0])
+    ax_D = fig.add_subplot(gs[4, 1])
+    ax_E = fig.add_subplot(gs[5, 0])
+    ax_F = fig.add_subplot(gs[5, 1])
+    ax_G = fig.add_subplot(gs[6, 0])
+    ax_H = fig.add_subplot(gs[6, 1])
 
     window_start_s = window_start_ms * 0.001
     window_end_s = window_end_ms * 0.001
     shared_ticks = np.linspace(window_start_s, window_end_s, 7)
 
+    focus_window = _resolve_stimulus_focus_window_ms(cfg)
+    if focus_window is not None:
+        focus_start_ms, focus_end_ms = focus_window
+        focus_data = _slice_data_window(data, focus_start_ms, focus_end_ms)
+        cfg_focus = copy.deepcopy(cfg)
+        cfg_focus.setdefault("analysis", {})["window_ms"] = {
+            "start": float(focus_start_ms),
+            "end": float(focus_end_ms),
+        }
+        cfg_focus["experiment"]["simtime_ms"] = float(focus_end_ms)
+        plot_spike_raster_ax(ax_A, focus_data, cfg_focus)
+    else:
+        plot_spike_raster_ax(ax_A, window_data, cfg_window)
+    ax_A.set_title("Raster (-5s/+20s around stimulus)")
+
+    for ax_arrow in arrow_axes:
+        ax_arrow.set_xticks([])
+        ax_arrow.set_yticks([])
+        ax_arrow.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        ax_arrow.text(0.5, 0.5, "\u2192", ha="center", va="center", fontsize=20)
+
+    snapshot_series = _select_weight_development_snapshots(cfg, weights_over_time)
+    sources = None
+    targets = None
+    if weights_over_time is not None:
+        sources = weights_over_time.get("sources")
+        targets = weights_over_time.get("targets")
+    if (sources is None or targets is None) and weights_data is not None:
+        sources = weights_data.get("sources")
+        targets = weights_data.get("targets")
+
+    im_devs = []
+    if snapshot_series and sources is not None and targets is not None and weights_over_time is not None:
+        all_weights = np.asarray(weights_over_time.get("weights", []), dtype=float)
+        for idx_ax, ax_mat in enumerate(matrix_axes):
+            if idx_ax >= len(snapshot_series):
+                ax_mat.axis("off")
+                continue
+            snap_idx, snap_time_ms, snap_label = snapshot_series[idx_ax]
+            snap_data = {
+                "sources": sources,
+                "targets": targets,
+                "weights": all_weights[snap_idx],
+            }
+            Wn_snap = build_weight_matrices(cfg, snap_data)
+            im_dev = plot_weight_matrix_ax(ax_mat, Wn_snap, cfg)
+            im_devs.append((ax_mat, im_dev))
+            ax_mat.set_title(
+                f"{snap_label} ({snap_time_ms / 1000.0:.0f}s)",
+                fontsize=11,
+                fontweight="bold",
+            )
+    else:
+        matrix_axes[0].text(0.5, 0.5, "no weight trajectory", ha="center", va="center")
+        for ax_mat in matrix_axes[1:]:
+            ax_mat.axis("off")
+
+    for ax_mat, im_dev in im_devs:
+        add_weight_matrix_colorbar(ax_mat, im_dev)
     plot_spike_raster_ax(ax_C, window_data, cfg_window)
-    ax_C.set_title("Post-learning state")
+    ax_C.set_title("Post-learning state", pad=24)
 
     _plot_trace_lines(ax_E, kuramoto_traces, value_key="R", ylabel="R")
     plot_kuramoto_pdf_multi_ax(ax_F, kuramoto_traces)
@@ -374,38 +628,93 @@ def create_bergoin_metrics_figure(
         ax_H.text(0.5, 0.5, "no data", ha="center", va="center")
         ax_H.set_axis_off()
 
-    _plot_trace_lines(
-        ax_I,
-        weight_traces,
-        value_key="K_values",
-        ylabel="Mean change\nrate of weights (Hz)",
-    )
-    plot_weight_change_pdf_multi_ax(ax_J, weight_traces)
     plot_pdf_cv_ax(ax_D, metrics_window["cv_N"])
 
-    for ax in (ax_C, ax_E, ax_G, ax_I):
+    synchrony_highlights = _build_synchrony_highlights(kuramoto_traces)
+    async_irregular_highlight = _build_async_irregular_highlight(kuramoto_traces)
+
+    highlight_bands = list(synchrony_highlights)
+    if async_irregular_highlight is not None:
+        highlight_bands.append(async_irregular_highlight)
+
+    for ax in (ax_C, ax_E, ax_G):
+        for band in highlight_bands:
+            ax.axvspan(
+                band["start_s"],
+                band["end_s"],
+                color=band["color"],
+                alpha=min(1.0, float(band.get("alpha", 0.16)) * 1.15),
+                zorder=0,
+            )
+
+    for band in highlight_bands:
+        label = band.get("label")
+        if not label:
+            continue
+        x_mid = 0.5 * (float(band["start_s"]) + float(band["end_s"]))
+        ax_C.text(
+            x_mid,
+            1.08,
+            str(label),
+            transform=ax_C.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            color=str(band.get("color", "black")),
+            bbox={
+                "boxstyle": "round,pad=0.18",
+                "facecolor": "white",
+                "edgecolor": str(band.get("color", "black")),
+                "linewidth": 0.9,
+                "alpha": 0.95,
+            },
+            clip_on=False,
+        )
+
+    for ax in (ax_C, ax_E, ax_G):
         ax.set_xlim(window_start_s, window_end_s)
         ax.set_xticks(shared_ticks)
 
-    for ax in (ax_C, ax_E, ax_G):
+    for ax in (ax_C, ax_E):
         ax.set_xlabel("")
         ax.tick_params(axis="x", labelbottom=False)
-    ax_I.set_xlabel("Time (seconds)")
+    ax_G.set_xlabel("Time (seconds)")
+
+    left_center_x = 0.5 * (matrix_axes[0].get_position().x0 + matrix_axes[0].get_position().x1)
+    right_center_x = 0.5 * (matrix_axes[-1].get_position().x0 + matrix_axes[-1].get_position().x1)
+    dev_top = max(matrix_axes[0].get_position().y1, matrix_axes[-1].get_position().y1)
+    fig.text(
+        0.5 * (left_center_x + right_center_x),
+        dev_top + 0.02,
+        "Weight Matrix Development",
+        ha="center",
+        va="bottom",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    left_anchor_x = min(
+        ax_A.get_position().x0,
+        ax_C.get_position().x0,
+        ax_E.get_position().x0,
+        ax_G.get_position().x0,
+    ) - 0.04
 
     panel_labels = {
+        ax_A: "A",
+        matrix_axes[0]: "B",
         ax_C: "C",
         ax_D: "D",
         ax_E: "E",
         ax_F: "F",
         ax_G: "G",
         ax_H: "H",
-        ax_I: "I",
-        ax_J: "J",
     }
     for ax, label in panel_labels.items():
         bbox = ax.get_position()
+        x_pos = left_anchor_x if label in {"A", "B", "C", "E", "G"} else (bbox.x0 - 0.04)
         fig.text(
-            bbox.x0 - 0.04,
+            x_pos,
             bbox.y1 + 0.01,
             label,
             fontsize=18,
@@ -414,13 +723,36 @@ def create_bergoin_metrics_figure(
             ha="left",
         )
 
+    boxed_axes = [
+        ax_A,
+        ax_C,
+        ax_D,
+        ax_E,
+        ax_F,
+        ax_G,
+        ax_H,
+        *matrix_axes,
+    ]
+    for ax in boxed_axes:
+        _enable_subplot_box(ax)
+
+    for ax in arrow_axes:
+        ax.set_frame_on(False)
+        for side in ("left", "right", "top", "bottom"):
+            spine = ax.spines.get(side)
+            if spine is not None:
+                spine.set_visible(False)
+
     return fig
 
 
 def save_single_figure_pdf(fig, output_dir: Path, file_name: str):
+    from matplotlib.backends.backend_pdf import FigureCanvasPdf
+
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_dir / f"{file_name}.pdf"
-    fig.savefig(target, format="pdf")
+    canvas = FigureCanvasPdf(fig)
+    canvas.print_pdf(target)
     print(f"Saved {target}")
     plt.close(fig)
 
@@ -713,7 +1045,15 @@ def main():
     full_analysis_fig = None
     if auto_full_analysis:
         post_start_ms, post_end_ms = resolve_post_learning_interval_ms(cfg_full)
-        window_start_ms = post_start_ms
+        if args.full_analysis_start_s is not None:
+            window_start_ms = float(args.full_analysis_start_s) * 1000.0
+            if window_start_ms < post_start_ms or window_start_ms >= post_end_ms:
+                raise ValueError(
+                    "--full_analysis_start_s must lie inside inferred post-learning phase "
+                    f"[{post_start_ms/1000.0:.3f}, {post_end_ms/1000.0:.3f}] s"
+                )
+        else:
+            window_start_ms = post_start_ms
         window_end_ms = min(post_end_ms, window_start_ms + 30000.0)
         if window_end_ms > window_start_ms:
             print(
@@ -724,6 +1064,7 @@ def main():
             full_analysis_fig = create_bergoin_metrics_figure(
                 cfg_full,
                 data_full,
+                weights_data_full,
                 weights_over_time_full,
                 stim_metadata_full,
                 window_start_ms=window_start_ms,

@@ -263,7 +263,7 @@ def kuramoto_order_parameter(
             count_valid += 1
 
         if count_valid > 0:
-            Z_t = z_sum / count_valid
+            Z_t = z_sum / N
         else:
             Z_t = 0.0 + 0.0j
 
