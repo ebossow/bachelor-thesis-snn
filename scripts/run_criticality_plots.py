@@ -467,7 +467,7 @@ def _render_branching_combined_comparison(
     ax_sigma_post.tick_params(axis="y", labelleft=False)
     ax_tau_post.tick_params(axis="y", labelleft=False)
 
-    fig.suptitle(rf"Branching Comparison - {population_label}")
+    fig.suptitle(rf"Branching Ratio $m$ and Autocorrelation Time $\tau_{{MR}}$ Comparison - {population_label}")
 
     for left_ax, right_ax in ((ax_sigma_pre, ax_sigma_post), (ax_tau_pre, ax_tau_post)):
         left_pos = left_ax.get_position()
@@ -569,6 +569,279 @@ def _render_branching_combined_comparison(
     print(f"Saved {out_path}")
 
 
+def _render_branching_whole_vs_cluster_comparison(
+    whole_pre_sigma: np.ndarray,
+    whole_post_sigma: np.ndarray,
+    whole_pre_tau: np.ndarray,
+    whole_post_tau: np.ndarray,
+    cluster_pre_sigma: np.ndarray,
+    cluster_post_sigma: np.ndarray,
+    cluster_pre_tau: np.ndarray,
+    cluster_post_tau: np.ndarray,
+    alphas: np.ndarray,
+    betas: np.ndarray,
+    pre_window: str,
+    post_window: str,
+    output_dir: Path,
+    zoom_color_limits: tuple[float, float] = (0.90, 1.0),
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pre_label = _window_display_name(pre_window)
+    post_label = _window_display_name(post_window)
+
+    sigma_combined = np.concatenate(
+        [
+            whole_pre_sigma.ravel(),
+            whole_post_sigma.ravel(),
+            cluster_pre_sigma.ravel(),
+            cluster_post_sigma.ravel(),
+        ]
+    ).reshape(4, -1)
+    sigma_cmap, sigma_limits = build_sigma_colormap(sigma_combined)
+    sigma_vmin = sigma_vmax = None
+    if sigma_limits is not None:
+        sigma_vmin, sigma_vmax = sigma_limits
+
+    tau_combined = np.concatenate(
+        [
+            whole_pre_tau.ravel(),
+            whole_post_tau.ravel(),
+            cluster_pre_tau.ravel(),
+            cluster_post_tau.ravel(),
+        ]
+    )
+    tau_finite = tau_combined[np.isfinite(tau_combined)]
+    tau_vmin = tau_vmax = None
+    if tau_finite.size > 0:
+        tau_vmin = float(np.min(tau_finite))
+        tau_vmax = float(np.max(tau_finite))
+        if not np.isfinite(tau_vmin) or not np.isfinite(tau_vmax) or tau_vmax <= tau_vmin:
+            tau_vmin = tau_vmax = None
+
+    fig, axs = plt.subplots(2, 4, figsize=(20.0, 9.0), sharex=True, sharey=True)
+    fig.subplots_adjust(left=0.06, right=0.86, bottom=0.10, top=0.90, wspace=0.14, hspace=0.28)
+
+    extent = [float(alphas.min()), float(alphas.max()), float(betas.min()), float(betas.max())]
+
+    im_sigma = axs[0, 0].imshow(
+        whole_pre_sigma,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap=sigma_cmap,
+        vmin=sigma_vmin,
+        vmax=sigma_vmax,
+    )
+    axs[0, 1].imshow(
+        whole_post_sigma,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap=sigma_cmap,
+        vmin=sigma_vmin,
+        vmax=sigma_vmax,
+    )
+    axs[0, 2].imshow(
+        cluster_pre_sigma,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap=sigma_cmap,
+        vmin=sigma_vmin,
+        vmax=sigma_vmax,
+    )
+    axs[0, 3].imshow(
+        cluster_post_sigma,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap=sigma_cmap,
+        vmin=sigma_vmin,
+        vmax=sigma_vmax,
+    )
+
+    im_tau = axs[1, 0].imshow(
+        whole_pre_tau,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        vmin=tau_vmin,
+        vmax=tau_vmax,
+    )
+    axs[1, 1].imshow(
+        whole_post_tau,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        vmin=tau_vmin,
+        vmax=tau_vmax,
+    )
+    axs[1, 2].imshow(
+        cluster_pre_tau,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        vmin=tau_vmin,
+        vmax=tau_vmax,
+    )
+    axs[1, 3].imshow(
+        cluster_post_tau,
+        origin="lower",
+        aspect="equal",
+        extent=extent,
+        cmap="viridis",
+        vmin=tau_vmin,
+        vmax=tau_vmax,
+    )
+
+    axs[0, 0].set_title(rf"$m$ - Whole Population - {pre_label}")
+    axs[0, 1].set_title(rf"$m$ - Whole Population - {post_label}")
+    axs[0, 2].set_title(rf"$m$ - Cluster 1 - {pre_label}")
+    axs[0, 3].set_title(rf"$m$ - Cluster 1 - {post_label}")
+    axs[1, 0].set_title(rf"$\tau_{{MR}}$ - Whole Population - {pre_label}")
+    axs[1, 1].set_title(rf"$\tau_{{MR}}$ - Whole Population - {post_label}")
+    axs[1, 2].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {pre_label}")
+    axs[1, 3].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {post_label}")
+
+    tick_values = [0.0, 0.5, 1.0, 1.5, 2.0]
+    for ax in axs.ravel():
+        ax.set_xticks(tick_values)
+        ax.set_yticks(tick_values)
+        ax.set_xlabel(r"$s_{exc}$")
+
+    axs[0, 0].set_ylabel(r"$s_{inh}$")
+    axs[1, 0].set_ylabel(r"$s_{inh}$")
+    for col in (1, 2, 3):
+        axs[0, col].set_ylabel("")
+        axs[1, col].set_ylabel("")
+        axs[0, col].tick_params(axis="y", labelleft=False)
+        axs[1, col].tick_params(axis="y", labelleft=False)
+
+    fig.suptitle(rf"Branching Ratio $m$ and Autocorrelation Time $\tau_{{MR}}$ Comparison - Whole Population vs Cluster 1")
+
+    panel_labels = [
+        ("A", axs[0, 0]),
+        ("B", axs[0, 2]),
+        ("C", axs[1, 0]),
+        ("D", axs[1, 2]),
+    ]
+    for label, ax in panel_labels:
+        pos = ax.get_position()
+        fig.text(
+            pos.x0 - 0.010,
+            pos.y1 + 0.012,
+            label,
+            va="bottom",
+            ha="left",
+            fontsize=14,
+            fontweight="bold",
+        )
+
+    for row in (0, 1):
+        for left_col, right_col in ((0, 1), (2, 3)):
+            left_ax = axs[row, left_col]
+            right_ax = axs[row, right_col]
+            left_pos = left_ax.get_position()
+            right_pos = right_ax.get_position()
+            arrow_y = 0.5 * (left_pos.y0 + left_pos.y1)
+            arrow_start = (left_pos.x1 + 0.008, arrow_y)
+            arrow_end = (right_pos.x0 - 0.008, arrow_y)
+            left_ax.annotate(
+                "",
+                xy=arrow_end,
+                xytext=arrow_start,
+                xycoords=fig.transFigure,
+                textcoords=fig.transFigure,
+                arrowprops={"arrowstyle": "->", "linewidth": 1.4, "color": "black"},
+                annotation_clip=False,
+            )
+
+    fig.canvas.draw()
+    sigma_right = axs[0, 3].get_position()
+    tau_right = axs[1, 3].get_position()
+    cbar_width = 0.018
+    cbar_gap = 0.014
+    main_x = sigma_right.x1 + 0.020
+    zoom_x = main_x + cbar_width + cbar_gap
+
+    sigma_cax = fig.add_axes([main_x, sigma_right.y0, cbar_width, sigma_right.height])
+    sigma_cbar = fig.colorbar(im_sigma, cax=sigma_cax)
+    sigma_cbar.set_label(r"$m$")
+    sigma_cbar.ax.yaxis.set_ticks_position("left")
+    sigma_cbar.ax.yaxis.set_label_position("left")
+
+    zmin, zmax = zoom_color_limits
+    if np.isfinite(zmin) and np.isfinite(zmax) and zmax > zmin:
+        full_vmin = float(im_sigma.norm.vmin) if im_sigma.norm.vmin is not None else float(np.nanmin(sigma_combined))
+        full_vmax = float(im_sigma.norm.vmax) if im_sigma.norm.vmax is not None else float(np.nanmax(sigma_combined))
+        if np.isfinite(full_vmin) and np.isfinite(full_vmax) and full_vmax > full_vmin:
+            frac_min = float(np.clip((zmin - full_vmin) / (full_vmax - full_vmin), 0.0, 1.0))
+            frac_max = float(np.clip((zmax - full_vmin) / (full_vmax - full_vmin), 0.0, 1.0))
+        else:
+            frac_min, frac_max = 0.0, 1.0
+        if frac_max <= frac_min:
+            frac_min, frac_max = 0.0, 1.0
+
+        base_cmap = plt.get_cmap(sigma_cmap) if isinstance(sigma_cmap, str) else sigma_cmap
+        zoom_colors = base_cmap(np.linspace(frac_min, frac_max, 256))
+        zoom_cmap = ListedColormap(zoom_colors)
+
+        sigma_zoom_ax = fig.add_axes([zoom_x, sigma_right.y0, cbar_width, sigma_right.height])
+        sigma_zoom_sm = plt.cm.ScalarMappable(norm=Normalize(vmin=zmin, vmax=zmax), cmap=zoom_cmap)
+        sigma_zoom_sm.set_array([])
+        sigma_zoom_cbar = fig.colorbar(sigma_zoom_sm, cax=sigma_zoom_ax)
+        sigma_zoom_cbar.ax.yaxis.set_ticks_position("right")
+        sigma_zoom_cbar.ax.yaxis.set_label_position("right")
+
+        y_main_low = full_vmin + frac_min * (full_vmax - full_vmin)
+        y_main_high = full_vmin + frac_max * (full_vmax - full_vmin)
+        for y_main in (y_main_low, y_main_high):
+            sigma_cbar.ax.axhline(y=y_main, color="black", linewidth=1.0, alpha=0.8)
+        for y_zoom in (zmin, zmax):
+            sigma_zoom_cbar.ax.axhline(y=y_zoom, color="black", linewidth=1.0, alpha=0.8)
+
+        connector_low = ConnectionPatch(
+            xyA=(1.0, frac_min),
+            coordsA="axes fraction",
+            axesA=sigma_cbar.ax,
+            xyB=(0.0, 0.0),
+            coordsB="axes fraction",
+            axesB=sigma_zoom_cbar.ax,
+            color="black",
+            linewidth=0.9,
+            alpha=0.75,
+            clip_on=False,
+        )
+        connector_high = ConnectionPatch(
+            xyA=(1.0, frac_max),
+            coordsA="axes fraction",
+            axesA=sigma_cbar.ax,
+            xyB=(0.0, 1.0),
+            coordsB="axes fraction",
+            axesB=sigma_zoom_cbar.ax,
+            color="black",
+            linewidth=0.9,
+            alpha=0.75,
+            clip_on=False,
+        )
+        fig.add_artist(connector_low)
+        fig.add_artist(connector_high)
+
+    tau_cax = fig.add_axes([main_x, tau_right.y0, cbar_width, tau_right.height])
+    tau_cbar = fig.colorbar(im_tau, cax=tau_cax)
+    tau_cbar.set_label(r"$\tau_{MR}$ (ms)")
+    tau_cbar.ax.yaxis.set_ticks_position("left")
+    tau_cbar.ax.yaxis.set_label_position("left")
+
+    out_path = output_dir / "branching_ratio_whole_vs_cluster.pdf"
+    fig.savefig(out_path, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
 def create_branching_pre_post_plots(
     mean_dir: Path,
     output_root: Path,
@@ -609,6 +882,58 @@ def create_branching_pre_post_plots(
         pre_window=pre_window,
         post_window=post_window,
         output_dir=branching_output,
+        zoom_color_limits=(0.90, 1.0),
+    )
+
+    whole_population = "whole_population"
+    cluster_population = "stimulus_block_E_half_0"
+    whole_pre_dir = mean_dir / "branching" / whole_population / pre_window
+    whole_post_dir = mean_dir / "branching" / whole_population / post_window
+    cluster_pre_dir = mean_dir / "branching" / cluster_population / pre_window
+    cluster_post_dir = mean_dir / "branching" / cluster_population / post_window
+
+    if not whole_pre_dir.exists():
+        raise FileNotFoundError(f"Missing whole-population pre window directory: {whole_pre_dir}")
+    if not whole_post_dir.exists():
+        raise FileNotFoundError(f"Missing whole-population post window directory: {whole_post_dir}")
+    if not cluster_pre_dir.exists():
+        raise FileNotFoundError(f"Missing cluster-1 pre window directory: {cluster_pre_dir}")
+    if not cluster_post_dir.exists():
+        raise FileNotFoundError(f"Missing cluster-1 post window directory: {cluster_post_dir}")
+
+    whole_pre_metrics = _load_branching_metrics_npz(whole_pre_dir)
+    whole_post_metrics = _load_branching_metrics_npz(whole_post_dir)
+    cluster_pre_metrics = _load_branching_metrics_npz(cluster_pre_dir)
+    cluster_post_metrics = _load_branching_metrics_npz(cluster_post_dir)
+
+    for label, lhs, rhs in (
+        ("whole_population", whole_pre_metrics, whole_post_metrics),
+        ("cluster_1", cluster_pre_metrics, cluster_post_metrics),
+    ):
+        if not np.allclose(lhs["alphas"], rhs["alphas"]):
+            raise ValueError(f"Alpha grids differ between pre and post windows for {label}")
+        if not np.allclose(lhs["betas"], rhs["betas"]):
+            raise ValueError(f"Beta grids differ between pre and post windows for {label}")
+
+    if not np.allclose(whole_pre_metrics["alphas"], cluster_pre_metrics["alphas"]):
+        raise ValueError("Alpha grids differ between whole population and cluster 1")
+    if not np.allclose(whole_pre_metrics["betas"], cluster_pre_metrics["betas"]):
+        raise ValueError("Beta grids differ between whole population and cluster 1")
+
+    _render_branching_whole_vs_cluster_comparison(
+        whole_pre_sigma=whole_pre_metrics["sigma_mr"],
+        whole_post_sigma=whole_post_metrics["sigma_mr"],
+        whole_pre_tau=whole_pre_metrics["tau_mr_ms"],
+        whole_post_tau=whole_post_metrics["tau_mr_ms"],
+        cluster_pre_sigma=cluster_pre_metrics["sigma_mr"],
+        cluster_post_sigma=cluster_post_metrics["sigma_mr"],
+        cluster_pre_tau=cluster_pre_metrics["tau_mr_ms"],
+        cluster_post_tau=cluster_post_metrics["tau_mr_ms"],
+        alphas=whole_pre_metrics["alphas"],
+        betas=whole_pre_metrics["betas"],
+        pre_window=pre_window,
+        post_window=post_window,
+        output_dir=output_root / "branching",
         zoom_color_limits=(0.90, 1.0),
     )
 

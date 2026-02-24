@@ -19,7 +19,7 @@ DEFAULT_SWEEP_ROOT = Path(
 DEFAULT_RUN_NAMES = [
     "alpha_0.53_beta_0.11_s00",
     "alpha_1.79_beta_0.00_s00",
-    "alpha_0.63_beta_1.89_s00",
+    "alpha_0.11_beta_1.89_s00",
 ]
 DEFAULT_OUTPUT_DIR = Path("results/plots/raster_comparison")
 DEFAULT_CRITICALITY_RUN_ANALYSIS_DIR = Path(
