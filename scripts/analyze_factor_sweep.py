@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, Tuple
 import matplotlib.pyplot as plt
 from matplotlib import ticker
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap, Normalize
+from matplotlib.patches import ConnectionPatch
 import numpy as np
 import yaml
 
@@ -61,6 +62,13 @@ GRID_METRIC_KEYS = [
     "pl_p_duration_lognormal",
     "pl_R_duration_exponential",
     "pl_p_duration_exponential",
+    "pl_fit_ok_size",
+    "pl_fit_ok_duration",
+    "pl_fit_ok_both",
+    "tau_size_median",
+    "tau_size_iqr",
+    "tau_duration_median",
+    "tau_duration_iqr",
 ]
 
 BRANCHING_METRIC_KEYS = [
@@ -91,6 +99,13 @@ AVALANCHE_METRIC_KEYS = [
     "pl_p_duration_lognormal",
     "pl_R_duration_exponential",
     "pl_p_duration_exponential",
+    "pl_fit_ok_size",
+    "pl_fit_ok_duration",
+    "pl_fit_ok_both",
+    "tau_size_median",
+    "tau_size_iqr",
+    "tau_duration_median",
+    "tau_duration_iqr",
 ]
 
 CRITICALITY_RESULTS_ROOT = Path("results/criticality_analysis")
@@ -110,6 +125,28 @@ def sanitize_tau_mr_ms(value: float) -> float:
     if value < TAU_MR_MIN_MS or value > TAU_MR_MAX_MS:
         return float("nan")
     return float(value)
+
+
+def summarize_powerlaw_fit_quality(
+    per_population: dict[str, dict[str, dict[str, float]]],
+    pl_min_samples: int,
+) -> tuple[int, int]:
+    attempted = 0
+    accepted = 0
+    for windows in per_population.values():
+        for metrics in windows.values():
+            n_sizes = float(metrics.get("n_sizes", 0.0))
+            if n_sizes >= float(pl_min_samples):
+                attempted += 1
+                if np.isfinite(float(metrics.get("tau_size", np.nan))):
+                    accepted += 1
+
+            n_durations = float(metrics.get("n_durations", 0.0))
+            if n_durations >= float(pl_min_samples):
+                attempted += 1
+                if np.isfinite(float(metrics.get("tau_duration", np.nan))):
+                    accepted += 1
+    return attempted, accepted
 
 
 def slugify_label(label: str) -> str:
@@ -503,6 +540,24 @@ def parse_args() -> argparse.Namespace:
             "summary from existing per-run NPZ artifacts"
         ),
     )
+    parser.add_argument(
+        "--pl-early-stop-check-runs",
+        type=int,
+        default=0,
+        help=(
+            "If >0 and avalanche analysis is enabled, run a pilot on the first N sweep rows "
+            "and stop early when accepted power-law fit rate is too low"
+        ),
+    )
+    parser.add_argument(
+        "--pl-early-stop-min-good-rate",
+        type=float,
+        default=0.05,
+        help=(
+            "Minimum accepted fit-rate in the pilot phase (good/attempted); "
+            "used with --pl-early-stop-check-runs"
+        ),
+    )
 
     args = parser.parse_args()
     if args.mr_fit_start_ms is not None and args.mr_fit_start_ms <= 0.0:
@@ -518,8 +573,11 @@ def parse_args() -> argparse.Namespace:
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
     args.pl_min_samples = max(10, int(args.pl_min_samples))
     args.pl_min_tail_samples = max(10, int(args.pl_min_tail_samples))
+    args.pl_early_stop_check_runs = max(0, int(args.pl_early_stop_check_runs))
     if args.max_workers is not None and args.max_workers < 1:
         parser.error("--max-workers must be >= 1")
+    if not (0.0 <= float(args.pl_early_stop_min_good_rate) <= 1.0):
+        parser.error("--pl-early-stop-min-good-rate must be in [0, 1]")
     if not args.compute_branching and not args.compute_avalanche:
         parser.error("At least one analysis path must be enabled: --compute-branching and/or --compute-avalanche")
     return args
@@ -771,6 +829,13 @@ def compute_metrics_from_times(
         "pl_p_duration_lognormal": float("nan"),
         "pl_R_duration_exponential": float("nan"),
         "pl_p_duration_exponential": float("nan"),
+        "pl_fit_ok_size": float(0.0),
+        "pl_fit_ok_duration": float(0.0),
+        "pl_fit_ok_both": float(0.0),
+        "tau_size_median": float("nan"),
+        "tau_size_iqr": float("nan"),
+        "tau_duration_median": float("nan"),
+        "tau_duration_iqr": float("nan"),
     }
     if times.size == 0:
         return result
@@ -858,6 +923,9 @@ def compute_metrics_from_times(
 
     result["tau_size"] = tau_size
     result["tau_duration"] = tau_duration
+    result["pl_fit_ok_size"] = 1.0 if np.isfinite(tau_size) else 0.0
+    result["pl_fit_ok_duration"] = 1.0 if np.isfinite(tau_duration) else 0.0
+    result["pl_fit_ok_both"] = 1.0 if np.isfinite(tau_size) and np.isfinite(tau_duration) else 0.0
     if compute_avalanche:
         gamma_fitted = fit_gamma_exponent(sizes, durations)
         result["gamma_fitted"] = gamma_fitted
@@ -916,19 +984,19 @@ def build_sigma_colormap(
     positions: list[float] = []
     colors: list[str | tuple[float, float, float, float]] = []
     control_points = [
-        (0.0, "#2027ef"),  # deep blue for strongly subcritical
-        (norm(nearcritical_low), "#3f63ff"),  # start of near-critical ramp around sigma≈0.9
-        (norm(center - 0.08), "#556dff"),  # sigma≈0.92
-        (norm(center - 0.06), "#6b61ff"),  # sigma≈0.94
-        (norm(precritical_low), "#8f49ff"),  # purple around sigma≈0.95
-        (norm(center - 0.04), "#ad3ef2"),  # sigma≈0.96
-        (norm(center - 0.03), "#bf39e5"),  # sigma≈0.97
-        (norm(center - 0.02), "#cf35d8"),  # sigma≈0.98
-        (norm(center - 0.015), "#d83ccf"),  # sigma≈0.985
-        (norm(low), "#df3ec4"),  # magenta just below critical band
-        (norm(center), "#ff0000"),  # vivid red at sigma≈1
-        (norm(high), "#fffa6b"),  # yellow just above critical band
-        (1.0, "#2aff4a"),  # green for supercritical tail
+        (0.0, "#1a2a6c"),  # deep indigo for strongly subcritical
+        (norm(nearcritical_low), "#2e4a8b"),  # user-selected anchor around sigma≈0.9
+        (norm(center - 0.08), "#3b5ea8"),  # sigma≈0.92
+        (norm(center - 0.06), "#567ac0"),  # sigma≈0.94
+        (norm(precritical_low), "#7d9ad2"),  # sigma≈0.95
+        (norm(center - 0.04), "#ffd447"),  # sigma≈0.96 (start reverberative orange fade)
+        (norm(center - 0.03), "#ff9f1c"),  # sigma≈0.97
+        (norm(center - 0.02), "#ff8800"),  # sigma≈0.98
+        (norm(center - 0.015), "#ff6f00"),  # sigma≈0.985
+        (norm(low), "#ff4d00"),  # vivid orange just below critical band
+        (norm(center), "#b11226"),  # distinct narrow red at sigma≈1
+        (norm(high), "#7d53a2"),  # start purple above critical band
+        (1.0, "#4b2e83"),  # deep purple for supercritical tail
     ]
     for pos, color in control_points:
         if positions and abs(pos - positions[-1]) < 1e-3:
@@ -953,6 +1021,9 @@ def plot_heatmap(
     zoom_color_limits: tuple[float, float] | None = None,
     main_cbar_label: str | None = None,
     main_cbar_tick_format: str | None = None,
+    zoom_cbar_label: str | None = None,
+    x_label: str = "alpha (E→E scaling)",
+    y_label: str = "beta (I→E scaling)",
 ) -> None:
     has_zoom_bar = zoom_color_limits is not None
     fig_size = (7.8, 5) if has_zoom_bar else (6, 5)
@@ -972,15 +1043,15 @@ def plot_heatmap(
         vmin=vmin,
         vmax=vmax,
     )
-    ax.set_xlabel("alpha (E→E scaling)")
-    ax.set_ylabel("beta (I→E scaling)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
     ax.set_title(title)
     if has_zoom_bar:
         fig.canvas.draw()
         ax_pos = ax.get_position()
         cbar_width = 0.034
-        cbar_gap = 0.03
-        main_x = ax_pos.x1 + 0.1
+        cbar_gap = 0.015
+        main_x = ax_pos.x1 + 0.06
         zoom_x = main_x + cbar_width + cbar_gap
         main_cax = fig.add_axes([main_x, ax_pos.y0, cbar_width, ax_pos.height])
         main_cbar = fig.colorbar(im, cax=main_cax)
@@ -1018,9 +1089,46 @@ def plot_heatmap(
             zoom_sm = plt.cm.ScalarMappable(norm=Normalize(vmin=zmin, vmax=zmax), cmap=zoom_cmap)
             zoom_sm.set_array([])
             zoom_cbar = fig.colorbar(zoom_sm, cax=zoom_ax)
-            zoom_cbar.set_label(f"Zoom [{zmin:.2f}, {zmax:.2f}]")
+            if zoom_cbar_label is not None:
+                zoom_cbar.set_label(zoom_cbar_label)
+            else:
+                zoom_cbar.set_label(f"Zoom [{zmin:.2f}, {zmax:.2f}]")
             zoom_cbar.ax.yaxis.set_ticks_position("right")
             zoom_cbar.ax.yaxis.set_label_position("right")
+
+            y_main_low = full_vmin + frac_min * (full_vmax - full_vmin)
+            y_main_high = full_vmin + frac_max * (full_vmax - full_vmin)
+            for y_main in (y_main_low, y_main_high):
+                main_cbar.ax.axhline(y=y_main, color="black", linewidth=1.0, alpha=0.8)
+            for y_zoom in (zmin, zmax):
+                zoom_cbar.ax.axhline(y=y_zoom, color="black", linewidth=1.0, alpha=0.8)
+
+            connector_low = ConnectionPatch(
+                xyA=(1.0, frac_min),
+                coordsA="axes fraction",
+                axesA=main_cbar.ax,
+                xyB=(0.0, 0.0),
+                coordsB="axes fraction",
+                axesB=zoom_cbar.ax,
+                color="black",
+                linewidth=0.9,
+                alpha=0.75,
+                clip_on=False,
+            )
+            connector_high = ConnectionPatch(
+                xyA=(1.0, frac_max),
+                coordsA="axes fraction",
+                axesA=main_cbar.ax,
+                xyB=(0.0, 1.0),
+                coordsB="axes fraction",
+                axesB=zoom_cbar.ax,
+                color="black",
+                linewidth=0.9,
+                alpha=0.75,
+                clip_on=False,
+            )
+            fig.add_artist(connector_low)
+            fig.add_artist(connector_high)
 
     if not has_zoom_bar:
         fig.tight_layout()
@@ -1138,6 +1246,23 @@ def write_analysis_outputs(
                 betas,
                 f"Distance to criticality (DCC) [{window_result['name']}]",
                 avalanche_out / "heatmap_dcc.png",
+            )
+            tau_size_median_grid = window_result["grids"]["tau_size_median"]
+            plot_heatmap(
+                tau_size_median_grid,
+                alphas,
+                betas,
+                f"Avalanche exponent tau_size median [{window_result['name']}]",
+                avalanche_out / "heatmap_tau_size_median.png",
+            )
+            pl_fit_ok_both_grid = window_result["grids"]["pl_fit_ok_both"]
+            plot_heatmap(
+                pl_fit_ok_both_grid,
+                alphas,
+                betas,
+                f"Power-law fit acceptance rate (size & duration) [{window_result['name']}]",
+                avalanche_out / "heatmap_pl_fit_ok_both.png",
+                color_limits=(0.0, 1.0),
             )
 
 
@@ -1424,6 +1549,8 @@ def analyze_sweep_dir(
     compute_avalanche = bool(args.compute_avalanche)
     log_timing = bool(args.log_timing)
     disable_plots_effective = bool(args.disable_plots) if disable_plots_override is None else bool(disable_plots_override)
+    pl_early_stop_check_runs = int(args.pl_early_stop_check_runs)
+    pl_early_stop_min_good_rate = float(args.pl_early_stop_min_good_rate)
 
     timing_totals = {
         "load_run_s": 0.0,
@@ -1432,6 +1559,10 @@ def analyze_sweep_dir(
         "total_row_s": 0.0,
     }
     max_row_total_s = 0.0
+    prefetched_results: dict[
+        int,
+        tuple[int, float, float, str | None, dict[str, dict[str, dict[str, float]]], dict[str, float]],
+    ] = {}
 
     def record_row_result(
         row_idx: int,
@@ -1479,6 +1610,13 @@ def analyze_sweep_dir(
                     "pl_p_duration_lognormal": metrics["pl_p_duration_lognormal"],
                     "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
                     "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
+                    "pl_fit_ok_size": metrics["pl_fit_ok_size"],
+                    "pl_fit_ok_duration": metrics["pl_fit_ok_duration"],
+                    "pl_fit_ok_both": metrics["pl_fit_ok_both"],
+                    "tau_size_median": metrics["tau_size_median"],
+                    "tau_size_iqr": metrics["tau_size_iqr"],
+                    "tau_duration_median": metrics["tau_duration_median"],
+                    "tau_duration_iqr": metrics["tau_duration_iqr"],
                     "run_name": run_name,
                     "window": window_name,
                 }
@@ -1486,9 +1624,16 @@ def analyze_sweep_dir(
                 for key in GRID_METRIC_KEYS:
                     pop_windows[window_name]["grids"][key][bi, ai] = metrics[key]
 
-    if worker_count == 1:
-        for row_index, row in enumerate(summary_rows):
-            row_idx, alpha, beta, run_name, per_population, timing = _compute_row_all_metrics(
+    if compute_avalanche and pl_early_stop_check_runs > 0:
+        pilot_count = min(pl_early_stop_check_runs, len(summary_rows))
+        print(
+            f"Power-law pilot: evaluating first {pilot_count} rows "
+            f"(minimum accepted rate = {pl_early_stop_min_good_rate:.3f})"
+        )
+        pilot_attempted = 0
+        pilot_accepted = 0
+        for row_index, row in enumerate(summary_rows[:pilot_count]):
+            result = _compute_row_all_metrics(
                 row_index,
                 row,
                 sweep_dir,
@@ -1507,11 +1652,61 @@ def analyze_sweep_dir(
                 compute_branching,
                 compute_avalanche,
             )
+            prefetched_results[row_index] = result
+            _, _, _, _, per_population, _ = result
+            attempted, accepted = summarize_powerlaw_fit_quality(per_population, pl_min_samples)
+            pilot_attempted += attempted
+            pilot_accepted += accepted
+
+        if pilot_attempted == 0:
+            print(
+                "Power-law pilot: no eligible size/duration samples reached pl_min_samples; "
+                "continuing analysis"
+            )
+        else:
+            pilot_rate = pilot_accepted / pilot_attempted
+            print(
+                f"Power-law pilot result: accepted={pilot_accepted}, attempted={pilot_attempted}, "
+                f"rate={pilot_rate:.3f}"
+            )
+            if pilot_rate < pl_early_stop_min_good_rate:
+                print(
+                    "Warning: pilot accepted-fit rate "
+                    f"{pilot_rate:.3f} is below threshold {pl_early_stop_min_good_rate:.3f}; "
+                    "continuing full analysis for all rows"
+                )
+
+    if worker_count == 1:
+        for row_index, row in enumerate(summary_rows):
+            if row_index in prefetched_results:
+                row_idx, alpha, beta, run_name, per_population, timing = prefetched_results[row_index]
+            else:
+                row_idx, alpha, beta, run_name, per_population, timing = _compute_row_all_metrics(
+                    row_index,
+                    row,
+                    sweep_dir,
+                    population_specs,
+                    windows,
+                    dt_mr_ms,
+                    dt_avalanche_override_ms,
+                    min_avalanche_size,
+                    fit_lag_ms_min,
+                    fit_lag_ms_max,
+                    fit_use_offset,
+                    min_fit_points,
+                    pl_min_samples,
+                    pl_min_tail_samples,
+                    pl_require_not_worse,
+                    compute_branching,
+                    compute_avalanche,
+                )
             record_row_result(row_idx, alpha, beta, run_name, per_population, timing)
     else:
         future_to_row: dict[Any, dict[str, Any]] = {}
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
             for row_index, row in enumerate(summary_rows):
+                if row_index in prefetched_results:
+                    continue
                 future = executor.submit(
                     _compute_row_all_metrics,
                     row_index,
@@ -1544,6 +1739,10 @@ def analyze_sweep_dir(
                         f"(run={row.get('run_name')})"
                     ) from exc
                 record_row_result(row_idx, alpha, beta, run_name, per_population, timing)
+
+        for row_index in sorted(prefetched_results):
+            row_idx, alpha, beta, run_name, per_population, timing = prefetched_results[row_index]
+            record_row_result(row_idx, alpha, beta, run_name, per_population, timing)
 
     save_t0 = time.perf_counter()
     for pop_folder in population_order:
@@ -1775,6 +1974,7 @@ def aggregate_multi_run_results(
         for window_name in window_order:
             base_window = base_pop_windows[window_name]
             aggregated_grids: dict[str, np.ndarray] = {}
+            per_key_stacks: dict[str, np.ndarray] = {}
             for key in GRID_METRIC_KEYS:
                 stack = np.stack(
                     [
@@ -1783,7 +1983,23 @@ def aggregate_multi_run_results(
                     ],
                     axis=0,
                 )
+                per_key_stacks[key] = stack
                 aggregated_grids[key] = np.nanmean(stack, axis=0)
+
+            # Robust avalanche summary statistics for accepted exponent values.
+            tau_size_stack = per_key_stacks["tau_size"]
+            tau_duration_stack = per_key_stacks["tau_duration"]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                aggregated_grids["tau_size_median"] = np.nanmedian(tau_size_stack, axis=0)
+                tau_size_q75 = np.nanpercentile(tau_size_stack, 75, axis=0)
+                tau_size_q25 = np.nanpercentile(tau_size_stack, 25, axis=0)
+                aggregated_grids["tau_size_iqr"] = tau_size_q75 - tau_size_q25
+
+                aggregated_grids["tau_duration_median"] = np.nanmedian(tau_duration_stack, axis=0)
+                tau_duration_q75 = np.nanpercentile(tau_duration_stack, 75, axis=0)
+                tau_duration_q25 = np.nanpercentile(tau_duration_stack, 25, axis=0)
+                aggregated_grids["tau_duration_iqr"] = tau_duration_q75 - tau_duration_q25
 
             analysis_rows = build_average_rows(
                 alphas,

@@ -7,7 +7,13 @@ import numpy as np
 
 from src.analysis.summary_metrics import compute_summary_metrics
 from src.analysis.summary_figure import create_summary_figure, _plot_stimulus_rate_distribution
-from src.analysis.metrics import build_weight_matrix, normalize_weight_matrix
+from src.analysis.metrics import (
+    build_weight_matrix,
+    normalize_weight_matrix,
+    binned_spike_counts,
+    branching_ratio_mr_estimator,
+    MRESTIMATOR_AVAILABLE,
+)
 from src.analysis.plotting import (
     plot_spike_raster_ax,
     plot_weight_matrix_ax,
@@ -486,6 +492,98 @@ def _select_weight_development_snapshots(cfg, weights_over_time):
     return selected[:2]
 
 
+def _collect_combined_spike_times(window_data) -> np.ndarray:
+    times: list[np.ndarray] = []
+    for key in ("spikes_E", "spikes_IH", "spikes_IA"):
+        pop = window_data.get(key)
+        if pop is None:
+            continue
+        t = np.asarray(pop.get("times", []), dtype=float)
+        if t.size > 0:
+            times.append(t)
+    if not times:
+        return np.array([], dtype=float)
+    return np.sort(np.concatenate(times))
+
+
+def _compute_m_timecourse(
+    times_ms: np.ndarray,
+    *,
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float = 4.0,
+    window_ms: float = 5000.0,
+    step_ms: float = 250.0,
+    fit_lag_ms_min: float = 10.0,
+    fit_lag_ms_max: float = 60.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    counts, _ = binned_spike_counts(
+        times_ms=times_ms,
+        t_start_ms=t_start_ms,
+        t_stop_ms=t_stop_ms,
+        dt_ms=dt_ms,
+    )
+
+    if counts.size < 3:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    window_bins = max(3, int(round(window_ms / dt_ms)))
+    step_bins = max(1, int(round(step_ms / dt_ms)))
+    if window_bins > counts.size:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    centers_ms: list[float] = []
+    m_vals: list[float] = []
+
+    max_start = counts.size - window_bins
+    for start in range(0, max_start + 1, step_bins):
+        segment = counts[start : start + window_bins]
+        m_val, _tau_ms = branching_ratio_mr_estimator(
+            spike_counts=segment,
+            dt_ms=dt_ms,
+            fit_lag_ms_min=fit_lag_ms_min,
+            fit_lag_ms_max=fit_lag_ms_max,
+            min_fit_points=3,
+            fit_use_offset=False,
+        )
+        center_ms = t_start_ms + (start + 0.5 * window_bins) * dt_ms
+        centers_ms.append(center_ms)
+        m_vals.append(m_val)
+
+    return np.asarray(centers_ms, dtype=float) * 0.001, np.asarray(m_vals, dtype=float)
+
+
+def _plot_m_timecourse_ax(ax, window_data, window_start_ms: float, window_end_ms: float):
+    if not MRESTIMATOR_AVAILABLE:
+        ax.text(0.5, 0.5, "mrestimator not available", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    times_ms = _collect_combined_spike_times(window_data)
+    if times_ms.size == 0:
+        ax.text(0.5, 0.5, "no spikes in window", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    t_s, m_t = _compute_m_timecourse(
+        times_ms,
+        t_start_ms=window_start_ms,
+        t_stop_ms=window_end_ms,
+        dt_ms=4.0,
+        window_ms=5000.0,
+        step_ms=250.0,
+    )
+    if t_s.size == 0:
+        ax.text(0.5, 0.5, "insufficient data for m(t)", ha="center", va="center")
+        ax.set_axis_off()
+        return
+
+    ax.plot(t_s, m_t, color="#1f77b4", linewidth=1.7)
+    ax.set_ylabel("m")
+    ax.set_title("Branching ratio m(t)")
+    ax.grid(alpha=0.3)
+
+
 def create_bergoin_metrics_figure(
     cfg,
     data,
@@ -494,6 +592,7 @@ def create_bergoin_metrics_figure(
     stim_metadata,
     window_start_ms: float,
     window_end_ms: float,
+    include_m_timecourse_row: bool = False,
 ):
     window_data = _slice_data_window(data, window_start_ms, window_end_ms)
     window_weights = _slice_weights_window(weights_over_time, window_start_ms, window_end_ms)
@@ -524,7 +623,8 @@ def create_bergoin_metrics_figure(
         max_clusters=2,
     )
 
-    fig = plt.figure(figsize=(14.0, 13.5))
+    fig_height = 15.5 if include_m_timecourse_row else 13.5
+    fig = plt.figure(figsize=(14.0, fig_height))
     gs = fig.add_gridspec(
         7,
         2,
@@ -545,8 +645,9 @@ def create_bergoin_metrics_figure(
     matrix_axes = [fig.add_subplot(dev_gs[0, col]) for col in (1, 3)]
     arrow_axes = [fig.add_subplot(dev_gs[0, 2])]
 
+    lower_rows = 4 if include_m_timecourse_row else 3
     lower_gs = gs[4:, :].subgridspec(
-        3,
+        lower_rows,
         2,
         width_ratios=(3.2, 1.35),
         hspace=0.5,
@@ -558,6 +659,11 @@ def create_bergoin_metrics_figure(
     ax_F = fig.add_subplot(lower_gs[1, 1])
     ax_G = fig.add_subplot(lower_gs[2, 0])
     ax_H = fig.add_subplot(lower_gs[2, 1])
+    ax_I = None
+    ax_I_aux = None
+    if include_m_timecourse_row:
+        ax_I = fig.add_subplot(lower_gs[3, 0])
+        ax_I_aux = fig.add_subplot(lower_gs[3, 1])
 
     window_start_s = window_start_ms * 0.001
     window_end_s = window_end_ms * 0.001
@@ -638,6 +744,11 @@ def create_bergoin_metrics_figure(
 
     plot_pdf_cv_ax(ax_D, metrics_window["cv_N"])
 
+    if include_m_timecourse_row and ax_I is not None:
+        _plot_m_timecourse_ax(ax_I, window_data, window_start_ms, window_end_ms)
+        if ax_I_aux is not None:
+            ax_I_aux.axis("off")
+
     synchrony_highlights = _build_synchrony_highlights(kuramoto_traces)
     async_irregular_highlight = _build_async_irregular_highlight(kuramoto_traces)
 
@@ -645,7 +756,9 @@ def create_bergoin_metrics_figure(
     if async_irregular_highlight is not None:
         highlight_bands.append(async_irregular_highlight)
 
-    for ax in (ax_C, ax_E, ax_G):
+    highlight_axes = [ax_C, ax_E, ax_G]
+
+    for ax in highlight_axes:
         for band in highlight_bands:
             ax.axvspan(
                 band["start_s"],
@@ -679,14 +792,20 @@ def create_bergoin_metrics_figure(
             clip_on=False,
         )
 
-    for ax in (ax_C, ax_E, ax_G):
+    for ax in highlight_axes:
         ax.set_xlim(window_start_s, window_end_s)
         ax.set_xticks(shared_ticks)
 
     for ax in (ax_C, ax_E):
         ax.set_xlabel("")
         ax.tick_params(axis="x", labelbottom=False)
-    ax_G.set_xlabel("Time (seconds)")
+
+    if include_m_timecourse_row and ax_I is not None:
+        ax_G.set_xlabel("")
+        ax_G.tick_params(axis="x", labelbottom=False)
+        ax_I.set_xlabel("Time (seconds)")
+    else:
+        ax_G.set_xlabel("Time (seconds)")
 
     left_center_x = 0.5 * (matrix_axes[0].get_position().x0 + matrix_axes[0].get_position().x1)
     right_center_x = 0.5 * (matrix_axes[-1].get_position().x0 + matrix_axes[-1].get_position().x1)
@@ -718,9 +837,12 @@ def create_bergoin_metrics_figure(
         ax_G: "G",
         ax_H: "H",
     }
+    if include_m_timecourse_row and ax_I is not None:
+        panel_labels[ax_I] = "I"
+
     for ax, label in panel_labels.items():
         bbox = ax.get_position()
-        x_pos = left_anchor_x if label in {"A", "B", "C", "E", "G"} else (bbox.x0 - 0.04)
+        x_pos = left_anchor_x if label in {"A", "B", "C", "E", "G", "I"} else (bbox.x0 - 0.04)
         fig.text(
             x_pos,
             bbox.y1 + 0.01,
@@ -741,6 +863,9 @@ def create_bergoin_metrics_figure(
         ax_H,
         *matrix_axes,
     ]
+    if include_m_timecourse_row and ax_I is not None:
+        boxed_axes.append(ax_I)
+
     for ax in boxed_axes:
         _enable_subplot_box(ax)
 
@@ -1051,6 +1176,7 @@ def main():
 
     figures = []
     full_analysis_fig = None
+    full_analysis_with_m_fig = None
     if auto_full_analysis:
         post_start_ms, post_end_ms = resolve_post_learning_interval_ms(cfg_full)
         if args.full_analysis_start_s is not None:
@@ -1077,6 +1203,16 @@ def main():
                 stim_metadata_full,
                 window_start_ms=window_start_ms,
                 window_end_ms=window_end_ms,
+            )
+            full_analysis_with_m_fig = create_bergoin_metrics_figure(
+                cfg_full,
+                data_full,
+                weights_data_full,
+                weights_over_time_full,
+                stim_metadata_full,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                include_m_timecourse_row=True,
             )
 
     if args.output_pdf:
@@ -1146,6 +1282,9 @@ def main():
     if full_analysis_fig is not None:
         output_dir = Path("results") / "plots" / run_dir.name
         save_single_figure_pdf(full_analysis_fig, output_dir, "full_analysis")
+    if full_analysis_with_m_fig is not None:
+        output_dir = Path("results") / "plots" / run_dir.name
+        save_single_figure_pdf(full_analysis_with_m_fig, output_dir, "full_analysis_with_m")
 
 
 if __name__ == "__main__":

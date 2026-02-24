@@ -8,6 +8,7 @@ import numpy as np
 from src.analysis.util import load_run, find_latest_run_dir, combine_spikes
 from src.analysis.metrics import (
     average_inter_event_interval,
+    binned_spike_counts,
     empty_bin_fraction,
     branching_ratios_binned_global,
     branching_ratio_mr_estimator,
@@ -62,6 +63,83 @@ def _parse_manual_dt_values(raw: str | None) -> list[float] | None:
             values.append(value)
 
     return values or None
+
+
+def _plot_mr_timecourse(
+    t_centers_ms: np.ndarray,
+    sigma_mr: np.ndarray,
+    tau_mr_ms: np.ndarray,
+    *,
+    title: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
+
+    axes[0].plot(t_centers_ms, sigma_mr, "-o", ms=3, lw=1.25)
+    axes[0].set_ylabel(r"$m_{MR}(t)$")
+    axes[0].set_title(title)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(t_centers_ms, tau_mr_ms, "-o", ms=3, lw=1.25, color="tab:orange")
+    axes[1].set_ylabel(r"$\tau_{MR}(t)$ [ms]")
+    axes[1].set_xlabel("Time (ms)")
+    axes[1].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    plt.show()
+
+
+def _compute_mr_timecourse(
+    times_ms: np.ndarray,
+    *,
+    t_start_ms: float,
+    t_stop_ms: float,
+    dt_ms: float,
+    window_ms: float,
+    step_ms: float,
+    fit_lag_ms_min: float | None,
+    fit_lag_ms_max: float | None,
+    fit_use_offset: bool,
+    min_fit_points: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    counts, _ = binned_spike_counts(
+        times_ms=times_ms,
+        t_start_ms=t_start_ms,
+        t_stop_ms=t_stop_ms,
+        dt_ms=dt_ms,
+    )
+
+    if counts.size < 3:
+        return np.array([], dtype=float), np.array([], dtype=float), np.array([], dtype=float)
+
+    window_bins = max(3, int(round(window_ms / dt_ms)))
+    step_bins = max(1, int(round(step_ms / dt_ms)))
+    if window_bins > counts.size:
+        return np.array([], dtype=float), np.array([], dtype=float), np.array([], dtype=float)
+
+    centers: list[float] = []
+    sigmas: list[float] = []
+    taus: list[float] = []
+
+    last_start = counts.size - window_bins
+    for start in range(0, last_start + 1, step_bins):
+        stop = start + window_bins
+        segment = counts[start:stop]
+        sigma_mr, tau_mr = branching_ratio_mr_estimator(
+            spike_counts=segment,
+            dt_ms=dt_ms,
+            fit_lag_ms_min=fit_lag_ms_min,
+            fit_lag_ms_max=fit_lag_ms_max,
+            fit_use_offset=fit_use_offset,
+            min_fit_points=min_fit_points,
+        )
+        center_ms = t_start_ms + (start + 0.5 * window_bins) * dt_ms
+        centers.append(center_ms)
+        sigmas.append(sigma_mr)
+        taus.append(tau_mr)
+
+    return np.asarray(centers, dtype=float), np.asarray(sigmas, dtype=float), np.asarray(taus, dtype=float)
 
 
 def parse_args():
@@ -136,6 +214,41 @@ def parse_args():
         default=False,
         help="Nutze exp+offset-Modell (mit --no-mr_fit_use_offset für plain exp).",
     )
+    p.add_argument(
+        "--mr_timecourse",
+        action="store_true",
+        help="Berechne zeitaufgelöstes MR m(t) mit gleitendem Fenster.",
+    )
+    p.add_argument(
+        "--mr_timecourse_dt_ms",
+        type=float,
+        default=None,
+        help="Binbreite dt (ms) für m(t). Default: erster Wert aus --mr_dt_ms oder AIEI-basiert.",
+    )
+    p.add_argument(
+        "--mr_timecourse_window_ms",
+        type=float,
+        default=10000.0,
+        help="Fensterbreite (ms) für gleitendes m(t).",
+    )
+    p.add_argument(
+        "--mr_timecourse_step_ms",
+        type=float,
+        default=1000.0,
+        help="Schrittweite (ms) für gleitendes m(t).",
+    )
+    p.add_argument(
+        "--mr_timecourse_plot",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Zeige Plot von m(t) und tau_MR(t) (mit --no-mr_timecourse_plot deaktivieren).",
+    )
+    p.add_argument(
+        "--mr_timecourse_csv",
+        type=str,
+        default=None,
+        help="Optionaler Ausgabepfad für CSV mit Spalten time_center_ms,sigma_mr,tau_mr_ms.",
+    )
 
     args = p.parse_args()
 
@@ -149,6 +262,14 @@ def parse_args():
         and args.mr_fit_stop_ms <= args.mr_fit_start_ms
     ):
         p.error("--mr_fit_stop_ms must be greater than --mr_fit_start_ms")
+
+    if args.mr_timecourse_dt_ms is not None and args.mr_timecourse_dt_ms <= 0.0:
+        p.error("--mr_timecourse_dt_ms must be > 0")
+    if args.mr_timecourse_window_ms <= 0.0:
+        p.error("--mr_timecourse_window_ms must be > 0")
+    if args.mr_timecourse_step_ms <= 0.0:
+        p.error("--mr_timecourse_step_ms must be > 0")
+
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
 
     try:
@@ -242,6 +363,10 @@ def main():
         offset_flag = "with offset" if args.mr_fit_use_offset else "no offset"
         print(f"- MR fit window   : {window_desc} ({offset_flag})")
         print(f"- MR min points   : {args.mr_min_fit_points}")
+    if args.mr_timecourse:
+        print("- MR timecourse   : enabled")
+        print(f"- MR tc window ms : {args.mr_timecourse_window_ms:.1f}")
+        print(f"- MR tc step ms   : {args.mr_timecourse_step_ms:.1f}")
     print()
 
     # Markdown-Tabelle Header
@@ -316,6 +441,72 @@ def main():
                 _plot_mr_regression(coeffs, fit_result, title)
             except Exception as exc:  # pragma: no cover - plotting issues
                 print(f"[WARN] Could not plot MR regression for dt={dt_ms:.3f}: {exc}")
+
+    if args.mr_timecourse:
+        if not MRESTIMATOR_AVAILABLE:
+            print("\n[WARN] Skipping MR timecourse: mrestimator is not available.")
+            return
+
+        if args.mr_timecourse_dt_ms is not None:
+            dt_timecourse_ms = float(args.mr_timecourse_dt_ms)
+        elif args.mr_dt_ms_values and len(args.mr_dt_ms_values) > 0:
+            dt_timecourse_ms = max(float(args.mr_dt_ms_values[0]), float(args.dt_min_ms))
+        else:
+            dt_timecourse_ms = max(float(aiei_ms), float(args.dt_min_ms))
+
+        centers_ms, sigma_tc, tau_tc = _compute_mr_timecourse(
+            times_ms=times,
+            t_start_ms=t_start_ms,
+            t_stop_ms=t_stop_ms,
+            dt_ms=dt_timecourse_ms,
+            window_ms=float(args.mr_timecourse_window_ms),
+            step_ms=float(args.mr_timecourse_step_ms),
+            fit_lag_ms_min=args.mr_fit_start_ms,
+            fit_lag_ms_max=args.mr_fit_stop_ms,
+            fit_use_offset=bool(args.mr_fit_use_offset),
+            min_fit_points=int(args.mr_min_fit_points),
+        )
+
+        if centers_ms.size == 0:
+            print(
+                "\n[WARN] MR timecourse is empty. Increase t-window, reduce dt, or reduce "
+                "--mr_timecourse_window_ms."
+            )
+        else:
+            finite_mask = np.isfinite(sigma_tc)
+            n_valid = int(np.sum(finite_mask))
+            print(
+                f"\nMR timecourse: {centers_ms.size} windows, {n_valid} valid m estimates "
+                f"(dt={dt_timecourse_ms:.3f} ms)."
+            )
+            if n_valid > 0:
+                print(
+                    f"m(t): mean={np.nanmean(sigma_tc):.4f}, std={np.nanstd(sigma_tc):.4f}, "
+                    f"min={np.nanmin(sigma_tc):.4f}, max={np.nanmax(sigma_tc):.4f}"
+                )
+
+            if args.mr_timecourse_csv:
+                csv_path = Path(args.mr_timecourse_csv)
+                csv_path.parent.mkdir(parents=True, exist_ok=True)
+                export_mat = np.column_stack((centers_ms, sigma_tc, tau_tc))
+                np.savetxt(
+                    csv_path,
+                    export_mat,
+                    delimiter=",",
+                    header="time_center_ms,sigma_mr,tau_mr_ms",
+                    comments="",
+                )
+                print(f"Saved MR timecourse CSV: {csv_path}")
+
+            if args.mr_timecourse_plot:
+                try:
+                    title = (
+                        f"MR timecourse ({run_dir.name}) | dt={dt_timecourse_ms:.3f} ms, "
+                        f"window={args.mr_timecourse_window_ms:.0f} ms"
+                    )
+                    _plot_mr_timecourse(centers_ms, sigma_tc, tau_tc, title=title)
+                except Exception as exc:  # pragma: no cover - plotting issues
+                    print(f"[WARN] Could not plot MR timecourse: {exc}")
 
 
 if __name__ == "__main__":
