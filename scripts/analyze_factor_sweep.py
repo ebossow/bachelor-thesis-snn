@@ -541,6 +541,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--start-at-run",
+        type=str,
+        default=None,
+        help=(
+            "In multi-run mode, skip run_* directories that sort before this marker; "
+            "accepts either a run folder name (e.g., run_060) or a numeric index"
+        ),
+    )
+    parser.add_argument(
         "--pl-early-stop-check-runs",
         type=int,
         default=0,
@@ -739,6 +748,43 @@ def resolve_run_path(row: dict[str, Any], sweep_dir: Path) -> Path:
         if path.exists():
             return path
     raise FileNotFoundError(f"Cannot locate run folder for row: {row}")
+
+
+def _extract_run_numeric_token(name: str) -> int | None:
+    """Extract the first numeric token found in a run directory name."""
+
+    match = re.search(r"run_(\d+)", name)
+    if match:
+        return int(match.group(1))
+    tail = re.search(r"(\d+)$", name)
+    if tail:
+        return int(tail.group(1))
+    return None
+
+
+def _filter_run_dirs_by_start(run_dirs: list[Path], marker: str) -> list[Path]:
+    marker = marker.strip()
+    if not marker:
+        return run_dirs
+
+    marker_num: int | None
+    if marker.isdigit():
+        marker_num = int(marker)
+    else:
+        marker_num = _extract_run_numeric_token(marker)
+
+    filtered: list[Path] = []
+    for run_dir in run_dirs:
+        include = False
+        if marker_num is not None:
+            dir_num = _extract_run_numeric_token(run_dir.name)
+            if dir_num is not None:
+                include = dir_num >= marker_num
+        if not include:
+            include = run_dir.name >= marker
+        if include:
+            filtered.append(run_dir)
+    return filtered
 
 
 def analyze_run(
@@ -2164,6 +2210,18 @@ def analyze_multi_run_parent(multi_root: Path, args: argparse.Namespace) -> None
     )
     if not run_dirs:
         raise RuntimeError(f"No run_* directories found inside {multi_root}")
+
+    start_marker = (args.start_at_run or "").strip()
+    if start_marker:
+        original_count = len(run_dirs)
+        run_dirs = _filter_run_dirs_by_start(run_dirs, start_marker)
+        skipped = original_count - len(run_dirs)
+        if not run_dirs:
+            raise RuntimeError(
+                f"No run_* directories remain at or after start marker '{start_marker}'"
+            )
+        if skipped > 0:
+            print(f"Skipping {skipped} run(s) before start marker '{start_marker}'")
 
     multi_analysis_root = build_criticality_output_root(multi_root.name, "analysis")
     multi_analysis_root.mkdir(parents=True, exist_ok=True)

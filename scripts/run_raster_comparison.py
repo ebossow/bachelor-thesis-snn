@@ -14,16 +14,16 @@ import matplotlib.pyplot as plt
 
 
 DEFAULT_SWEEP_ROOT = Path(
-    "/Volumes/X9Pro/Backup Bachelor/260126/multiple_run_100_times_20260120_140859/run_000"
+    "/Volumes/X9Pro/Backup Bachelor/260126/multiple_run_100_times_20260120_140859/run_030"
 )
 DEFAULT_RUN_NAMES = [
+    "alpha_0.11_beta_1.89_s00",
     "alpha_0.53_beta_0.11_s00",
     "alpha_1.79_beta_0.00_s00",
-    "alpha_0.11_beta_1.89_s00",
 ]
 DEFAULT_OUTPUT_DIR = Path("results/plots/raster_comparison")
 DEFAULT_CRITICALITY_RUN_ANALYSIS_DIR = Path(
-    "results/criticality_analysis/multiple_run_100_times_20260120_140859_analysis/run_000_analysis"
+    "results/criticality_analysis/multiple_run_100_times_20260120_140859_analysis/run_030_analysis"
 )
 
 
@@ -209,8 +209,10 @@ def _plot_single_row(
     post_s: float,
     point_size: float,
     stim_metadata: Dict[str, Any] | None,
-    m_network: float,
-    m_cluster_1: float,
+    m_network_pre: float,
+    m_cluster_1_pre: float,
+    m_network_post: float,
+    m_cluster_1_post: float,
 ) -> None:
     t_on_ms, t_off_ms = _get_stim_times_ms(cfg, stim_metadata)
 
@@ -238,9 +240,20 @@ def _plot_single_row(
     ax.set_xlim(0.0, pre_s + post_s)
     ax.set_ylim(-1, n_total + 1)
     ax.set_ylabel("Neuron index")
-    ax.set_title(
-        rf"$s_{{exc}}={alpha:.2f},\ s_{{inh}}={beta:.2f},\ m_{{network}}={m_network:.3f},\ m_{{cluster\ 1}}={m_cluster_1:.3f}$"
-    )
+    
+    # First row: s_exc and s_inh centered over entire plot
+    total_time = pre_s + post_s
+    ax.text(total_time / 2, 1.12, rf"$s_{{exc}}={alpha:.2f},\ s_{{inh}}={beta:.2f}$",
+            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=13)
+    
+    # Second row: m values split by pre/post learning
+    # Pre-learning values centered over pre area (0 to pre_s)
+    ax.text(pre_s / 2, 1.05, rf"$m_{{network}}={m_network_pre:.3f},\ m_{{cluster1}}={m_cluster_1_pre:.3f}$",
+            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=11)
+    
+    # Post-learning values centered over post area (pre_s to pre_s + post_s)
+    ax.text(pre_s + post_s / 2, 1.05, rf"$m_{{network}}={m_network_post:.3f},\ m_{{cluster1}}={m_cluster_1_post:.3f}$",
+            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=11)
 
     pre_start_s = (t_on_ms - pre_s * 1000.0) / 1000.0
     post_start_s = t_off_ms / 1000.0
@@ -267,13 +280,19 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     branching_root = args.criticality_run_analysis_dir / "branching"
-    metrics_network = branching_root / "whole_population" / args.m_window / "metrics.npz"
-    metrics_cluster_1 = branching_root / "stimulus_block_E_half_0" / args.m_window / "metrics.npz"
+    
+    # Load both pre and post learning metrics
+    metrics_network_pre = branching_root / "whole_population" / "pre_learning" / "metrics.npz"
+    metrics_cluster_1_pre = branching_root / "stimulus_block_E_half_0" / "pre_learning" / "metrics.npz"
+    metrics_network_post = branching_root / "whole_population" / "post_learning" / "metrics.npz"
+    metrics_cluster_1_post = branching_root / "stimulus_block_E_half_0" / "post_learning" / "metrics.npz"
 
-    network_grid = _load_sigma_grid(metrics_network)
-    cluster_1_grid = _load_sigma_grid(metrics_cluster_1)
+    network_grid_pre = _load_sigma_grid(metrics_network_pre)
+    cluster_1_grid_pre = _load_sigma_grid(metrics_cluster_1_pre)
+    network_grid_post = _load_sigma_grid(metrics_network_post)
+    cluster_1_grid_post = _load_sigma_grid(metrics_cluster_1_post)
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 8.4), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
     for ax, run_name in zip(axes, args.run_names):
         run_dir = args.sweep_root / run_name
@@ -284,8 +303,10 @@ def main() -> None:
         alpha = float(cfg.get("experiment", {}).get("alpha", np.nan))
         beta = float(cfg.get("experiment", {}).get("beta", np.nan))
 
-        m_network = _lookup_sigma_for_alpha_beta(alpha, beta, network_grid)
-        m_cluster_1 = _lookup_sigma_for_alpha_beta(alpha, beta, cluster_1_grid)
+        m_network_pre = _lookup_sigma_for_alpha_beta(alpha, beta, network_grid_pre)
+        m_cluster_1_pre = _lookup_sigma_for_alpha_beta(alpha, beta, cluster_1_grid_pre)
+        m_network_post = _lookup_sigma_for_alpha_beta(alpha, beta, network_grid_post)
+        m_cluster_1_post = _lookup_sigma_for_alpha_beta(alpha, beta, cluster_1_grid_post)
 
         _plot_single_row(
             ax=ax,
@@ -296,29 +317,37 @@ def main() -> None:
             post_s=args.post_s,
             point_size=args.point_size,
             stim_metadata=stim_metadata,
-            m_network=m_network,
-            m_cluster_1=m_cluster_1,
+            m_network_pre=m_network_pre,
+            m_cluster_1_pre=m_cluster_1_pre,
+            m_network_post=m_network_post,
+            m_cluster_1_post=m_cluster_1_post,
         )
 
-    axes[-1].set_xlabel("Time (s, absolute simulation time; stimulus interval removed)")
+    axes[-1].set_xlabel("Time (s)")
+
+    # Add A, B, C labels to each subplot
+    for i, ax in enumerate(axes):
+        label = chr(65 + i)  # 65 is ASCII for 'A'
+        ax.text(-0.05, 1.0, label, transform=ax.transAxes, 
+                fontsize=16, fontweight='bold', va='top', ha='right')
 
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
         fig.legend(handles, labels, loc="upper right")
 
     fig.suptitle(
-        "Raster comparison (20s pre + 40s post, 35s stimulus interval removed)",
+        "Model functionality comparison for different E/I Ratios (20s pre + 40s post, 35s stimulus interval removed)",
         fontsize=14,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.tight_layout(rect=(0, 0, 1, 0.96), h_pad=2.5)
 
     stem = f"raster_comparison_pre{int(args.pre_s)}s_post{int(args.post_s)}s"
-    png_path = output_dir / f"{stem}.png"
+    #png_path = output_dir / f"{stem}.png"
     pdf_path = output_dir / f"{stem}.pdf"
-    fig.savefig(png_path, dpi=300)
+    #fig.savefig(png_path, dpi=300)
     fig.savefig(pdf_path)
 
-    print(f"Saved: {png_path}")
+    #print(f"Saved: {png_path}")
     print(f"Saved: {pdf_path}")
 
     if args.show:
