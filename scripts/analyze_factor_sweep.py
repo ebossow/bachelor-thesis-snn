@@ -56,15 +56,26 @@ GRID_METRIC_KEYS = [
     "pl_p_size_lognormal",
     "pl_R_size_exponential",
     "pl_p_size_exponential",
+    "pl_gof_p_size",
+    "pl_gof_valid_boot_size",
+    "pl_gof_bootstrap_exceptions_size",
+    "pl_gof_status_size",
     "pl_xmin_duration",
     "pl_ntail_duration",
     "pl_R_duration_lognormal",
     "pl_p_duration_lognormal",
     "pl_R_duration_exponential",
     "pl_p_duration_exponential",
+    "pl_gof_p_duration",
+    "pl_gof_valid_boot_duration",
+    "pl_gof_bootstrap_exceptions_duration",
+    "pl_gof_status_duration",
     "pl_fit_ok_size",
     "pl_fit_ok_duration",
     "pl_fit_ok_both",
+    "pl_better_size",
+    "pl_better_duration",
+    "pl_better_both",
     "tau_size_median",
     "tau_size_iqr",
     "tau_duration_median",
@@ -93,15 +104,26 @@ AVALANCHE_METRIC_KEYS = [
     "pl_p_size_lognormal",
     "pl_R_size_exponential",
     "pl_p_size_exponential",
+    "pl_gof_p_size",
+    "pl_gof_valid_boot_size",
+    "pl_gof_bootstrap_exceptions_size",
+    "pl_gof_status_size",
     "pl_xmin_duration",
     "pl_ntail_duration",
     "pl_R_duration_lognormal",
     "pl_p_duration_lognormal",
     "pl_R_duration_exponential",
     "pl_p_duration_exponential",
+    "pl_gof_p_duration",
+    "pl_gof_valid_boot_duration",
+    "pl_gof_bootstrap_exceptions_duration",
+    "pl_gof_status_duration",
     "pl_fit_ok_size",
     "pl_fit_ok_duration",
     "pl_fit_ok_both",
+    "pl_better_size",
+    "pl_better_duration",
+    "pl_better_both",
     "tau_size_median",
     "tau_size_iqr",
     "tau_duration_median",
@@ -113,6 +135,19 @@ TAU_MR_MIN_MS = 0.0
 TAU_MR_MAX_MS = 500.0
 
 MNIST_PATTERN_CURRENT_THRESHOLD_P_A = 1e-9
+CLAUSET_GOF_BOOTSTRAP_SAMPLES = 100
+
+GOF_STATUS_NOT_ATTEMPTED = 0.0
+GOF_STATUS_FIT_UNAVAILABLE = 1.0
+GOF_STATUS_INVALID_TAIL = 2.0
+GOF_STATUS_TAIL_TOO_SMALL = 3.0
+GOF_STATUS_INVALID_OBS_KS = 4.0
+GOF_STATUS_NO_VALID_BOOTSTRAP = 5.0
+GOF_STATUS_OK = 6.0
+GOF_STATUS_EXCEPTION_OBS_KS = 7.0
+GOF_STATUS_EXCEPTION_BOOTSTRAP = 8.0
+GOF_STATUS_EXCEPTION_OTHER = 9.0
+GOF_STATUS_DISABLED = 10.0
 
 
 def build_criticality_output_root(source_name: str, suffix: str = "analysis") -> Path:
@@ -433,6 +468,24 @@ def parse_args() -> argparse.Namespace:
         help="Minimum number of samples in the fitted power-law tail (>= xmin)",
     )
     parser.add_argument(
+        "--compute-pl-gof",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Clauset GOF bootstrap p-value computation (use --no-compute-pl-gof to skip for speed)",
+    )
+    parser.add_argument(
+        "--pl-gof-bootstrap-samples",
+        type=int,
+        default=CLAUSET_GOF_BOOTSTRAP_SAMPLES,
+        help="Number of bootstrap samples used for Clauset GOF p-value",
+    )
+    parser.add_argument(
+        "--pl-max-fit-samples",
+        type=int,
+        default=0,
+        help="Cap avalanche sample count used for power-law/LR diagnostics per metric (0 = no cap)",
+    )
+    parser.add_argument(
         "--pl-require-not-worse",
         action="store_true",
         help="If set, mark power-law exponents as NaN when power law is significantly worse than lognormal or exponential (based on likelihood-ratio test)",
@@ -582,6 +635,8 @@ def parse_args() -> argparse.Namespace:
     args.mr_min_fit_points = max(2, int(args.mr_min_fit_points))
     args.pl_min_samples = max(10, int(args.pl_min_samples))
     args.pl_min_tail_samples = max(10, int(args.pl_min_tail_samples))
+    args.pl_gof_bootstrap_samples = max(0, int(args.pl_gof_bootstrap_samples))
+    args.pl_max_fit_samples = max(0, int(args.pl_max_fit_samples))
     args.pl_early_stop_check_runs = max(0, int(args.pl_early_stop_check_runs))
     if args.max_workers is not None and args.max_workers < 1:
         parser.error("--max-workers must be >= 1")
@@ -630,8 +685,32 @@ def build_grid_coords(rows: Iterable[dict[str, Any]]) -> Tuple[np.ndarray, np.nd
     return np.asarray(alpha_set, float), np.asarray(beta_set, float)
 
 
+def _extract_ks_statistic(value: Any) -> float:
+    """Extract a scalar KS statistic from powerlaw outputs across versions."""
+    try:
+        scalar = float(value)
+        if np.isfinite(scalar):
+            return scalar
+    except Exception:
+        pass
 
-def fit_powerlaw_diagnostics(values: np.ndarray, discrete: bool = True) -> dict[str, float]:
+    if isinstance(value, (tuple, list, np.ndarray)):
+        arr = np.asarray(value, float).ravel()
+        finite = arr[np.isfinite(arr)]
+        if finite.size > 0:
+            return float(finite[0])
+
+    return float("nan")
+
+
+
+def fit_powerlaw_diagnostics(
+    values: np.ndarray,
+    discrete: bool = True,
+    compute_gof: bool = True,
+    gof_bootstrap_samples: int = CLAUSET_GOF_BOOTSTRAP_SAMPLES,
+    max_fit_samples: int | None = None,
+) -> dict[str, float]:
     """Fit a power-law and return exponent plus basic diagnostics.
 
     Returns NaNs when powerlaw is unavailable or the input is too small.
@@ -649,6 +728,10 @@ def fit_powerlaw_diagnostics(values: np.ndarray, discrete: bool = True) -> dict[
         "p_lognormal": float("nan"),
         "R_exponential": float("nan"),
         "p_exponential": float("nan"),
+        "gof_p": float("nan"),
+        "gof_valid_boot": float(0.0),
+        "gof_bootstrap_exceptions": float(0.0),
+        "gof_status": float(GOF_STATUS_FIT_UNAVAILABLE),
     }
     if not POWERLAW_AVAILABLE:
         return out
@@ -656,6 +739,10 @@ def fit_powerlaw_diagnostics(values: np.ndarray, discrete: bool = True) -> dict[
     vals = np.asarray(values, float)
     vals = vals[np.isfinite(vals)]
     vals = vals[vals > 0]
+    if max_fit_samples is not None and max_fit_samples > 0 and vals.size > max_fit_samples:
+        rng = np.random.default_rng(0)
+        indices = rng.choice(vals.size, size=max_fit_samples, replace=False)
+        vals = vals[indices]
     if vals.size < 5:
         return out
 
@@ -690,7 +777,133 @@ def fit_powerlaw_diagnostics(values: np.ndarray, discrete: bool = True) -> dict[
     except Exception:
         pass
 
+    if not compute_gof:
+        out["gof_status"] = float(GOF_STATUS_DISABLED)
+        return out
+
+    # Clauset-style GOF p-value using KS bootstrap on the fitted power-law tail.
+    try:
+        xmin = float(out["xmin"])
+        ntail = int(out["ntail"])
+        if not np.isfinite(xmin) or not np.isfinite(float(out["ntail"])):
+            out["gof_status"] = float(GOF_STATUS_INVALID_TAIL)
+            return out
+        if ntail < 10:
+            out["gof_status"] = float(GOF_STATUS_TAIL_TOO_SMALL)
+            return out
+
+        d_obs = float(getattr(fit.power_law, "D", np.nan))
+        if not np.isfinite(d_obs):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    d_obs_raw = fit.power_law.KS()
+                    d_obs = _extract_ks_statistic(d_obs_raw)
+            except Exception:
+                out["gof_status"] = float(GOF_STATUS_EXCEPTION_OBS_KS)
+                return out
+        if not np.isfinite(d_obs):
+            out["gof_status"] = float(GOF_STATUS_INVALID_OBS_KS)
+            return out
+
+        ge_count = 0
+        valid_boot = 0
+        bootstrap_exception_count = 0
+        for _ in range(max(0, int(gof_bootstrap_samples))):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    try:
+                        synth = fit.power_law.generate_random(ntail)
+                    except TypeError:
+                        synth = fit.power_law.generate_random(n=ntail)
+                    synth = np.asarray(synth, float)
+                    synth = synth[np.isfinite(synth)]
+                    synth = synth[synth > 0]
+                    if synth.size < 5:
+                        continue
+                    synth_fit = powerlaw.Fit(  # type: ignore[arg-type]
+                        synth,
+                        xmin=xmin,
+                        verbose=False,
+                        discrete=discrete,
+                    )
+                    d_syn = float(getattr(synth_fit.power_law, "D", np.nan))
+                    if not np.isfinite(d_syn):
+                        d_syn_raw = synth_fit.power_law.KS()
+                        d_syn = _extract_ks_statistic(d_syn_raw)
+                if np.isfinite(d_syn):
+                    valid_boot += 1
+                    if d_syn >= d_obs:
+                        ge_count += 1
+            except Exception:
+                bootstrap_exception_count += 1
+                continue
+        out["gof_valid_boot"] = float(valid_boot)
+        out["gof_bootstrap_exceptions"] = float(bootstrap_exception_count)
+        if valid_boot > 0:
+            out["gof_p"] = float(ge_count / valid_boot)
+            out["gof_status"] = float(GOF_STATUS_OK)
+        else:
+            if bootstrap_exception_count > 0:
+                out["gof_status"] = float(GOF_STATUS_EXCEPTION_BOOTSTRAP)
+            else:
+                out["gof_status"] = float(GOF_STATUS_NO_VALID_BOOTSTRAP)
+    except Exception:
+        out["gof_status"] = float(GOF_STATUS_EXCEPTION_OTHER)
+
     return out
+
+
+def powerlaw_not_worse_flag(
+    alpha: float,
+    r_lognormal: float,
+    p_lognormal: float,
+    r_exponential: float,
+    p_exponential: float,
+    significance_level: float = 0.1,
+) -> float:
+    """Return 1.0 when power law is not significantly worse than alternatives.
+
+    Conservative policy for reporting:
+      - Require a finite fitted exponent and finite LR diagnostics for both comparisons.
+      - Return 0 when diagnostics are missing/invalid.
+    """
+    if not np.isfinite(alpha):
+        return 0.0
+    if not (
+        np.isfinite(r_lognormal)
+        and np.isfinite(p_lognormal)
+        and np.isfinite(r_exponential)
+        and np.isfinite(p_exponential)
+    ):
+        return 0.0
+
+    lognormal_rejects_pl = (r_lognormal < 0.0) and (p_lognormal < significance_level)
+    exponential_rejects_pl = (r_exponential < 0.0) and (p_exponential < significance_level)
+    return 0.0 if (lognormal_rejects_pl or exponential_rejects_pl) else 1.0
+
+
+def populate_powerlaw_preference_metrics(metrics: dict[str, float]) -> None:
+    pl_better_size = powerlaw_not_worse_flag(
+        alpha=float(metrics.get("tau_size", np.nan)),
+        r_lognormal=float(metrics.get("pl_R_size_lognormal", np.nan)),
+        p_lognormal=float(metrics.get("pl_p_size_lognormal", np.nan)),
+        r_exponential=float(metrics.get("pl_R_size_exponential", np.nan)),
+        p_exponential=float(metrics.get("pl_p_size_exponential", np.nan)),
+    )
+    pl_better_duration = powerlaw_not_worse_flag(
+        alpha=float(metrics.get("tau_duration", np.nan)),
+        r_lognormal=float(metrics.get("pl_R_duration_lognormal", np.nan)),
+        p_lognormal=float(metrics.get("pl_p_duration_lognormal", np.nan)),
+        r_exponential=float(metrics.get("pl_R_duration_exponential", np.nan)),
+        p_exponential=float(metrics.get("pl_p_duration_exponential", np.nan)),
+    )
+    metrics["pl_better_size"] = float(pl_better_size)
+    metrics["pl_better_duration"] = float(pl_better_duration)
+    metrics["pl_better_both"] = (
+        1.0 if (pl_better_size > 0.5 and pl_better_duration > 0.5) else 0.0
+    )
 
 
 def fit_gamma_exponent(sizes: np.ndarray, durations: np.ndarray) -> float:
@@ -802,6 +1015,9 @@ def analyze_run(
     pl_min_samples: int,
     pl_min_tail_samples: int,
     pl_require_not_worse: bool,
+    compute_pl_gof: bool,
+    pl_gof_bootstrap_samples: int,
+    pl_max_fit_samples: int,
     compute_branching: bool,
     compute_avalanche: bool,
 ) -> dict[str, float]:
@@ -828,6 +1044,9 @@ def analyze_run(
         pl_min_samples=pl_min_samples,
         pl_min_tail_samples=pl_min_tail_samples,
         pl_require_not_worse=pl_require_not_worse,
+        compute_pl_gof=compute_pl_gof,
+        pl_gof_bootstrap_samples=pl_gof_bootstrap_samples,
+        pl_max_fit_samples=pl_max_fit_samples,
         compute_branching=compute_branching,
         compute_avalanche=compute_avalanche,
     )
@@ -847,6 +1066,9 @@ def compute_metrics_from_times(
     pl_min_samples: int,
     pl_min_tail_samples: int,
     pl_require_not_worse: bool,
+    compute_pl_gof: bool,
+    pl_gof_bootstrap_samples: int,
+    pl_max_fit_samples: int,
     compute_branching: bool,
     compute_avalanche: bool,
 ) -> dict[str, float]:
@@ -869,15 +1091,26 @@ def compute_metrics_from_times(
         "pl_p_size_lognormal": float("nan"),
         "pl_R_size_exponential": float("nan"),
         "pl_p_size_exponential": float("nan"),
+        "pl_gof_p_size": float("nan"),
+        "pl_gof_valid_boot_size": float(0.0),
+        "pl_gof_bootstrap_exceptions_size": float(0.0),
+        "pl_gof_status_size": float(GOF_STATUS_NOT_ATTEMPTED),
         "pl_xmin_duration": float("nan"),
         "pl_ntail_duration": float("nan"),
         "pl_R_duration_lognormal": float("nan"),
         "pl_p_duration_lognormal": float("nan"),
         "pl_R_duration_exponential": float("nan"),
         "pl_p_duration_exponential": float("nan"),
+        "pl_gof_p_duration": float("nan"),
+        "pl_gof_valid_boot_duration": float(0.0),
+        "pl_gof_bootstrap_exceptions_duration": float(0.0),
+        "pl_gof_status_duration": float(GOF_STATUS_NOT_ATTEMPTED),
         "pl_fit_ok_size": float(0.0),
         "pl_fit_ok_duration": float(0.0),
         "pl_fit_ok_both": float(0.0),
+        "pl_better_size": float(0.0),
+        "pl_better_duration": float(0.0),
+        "pl_better_both": float(0.0),
         "tau_size_median": float("nan"),
         "tau_size_iqr": float("nan"),
         "tau_duration_median": float("nan"),
@@ -928,13 +1161,22 @@ def compute_metrics_from_times(
     tau_duration = float("nan")
 
     if compute_avalanche and sizes.size >= pl_min_samples:
-        diag_s = fit_powerlaw_diagnostics(sizes)
+        diag_s = fit_powerlaw_diagnostics(
+            sizes,
+            compute_gof=compute_pl_gof,
+            gof_bootstrap_samples=pl_gof_bootstrap_samples,
+            max_fit_samples=(pl_max_fit_samples if pl_max_fit_samples > 0 else None),
+        )
         result["pl_xmin_size"] = diag_s["xmin"]
         result["pl_ntail_size"] = diag_s["ntail"]
         result["pl_R_size_lognormal"] = diag_s["R_lognormal"]
         result["pl_p_size_lognormal"] = diag_s["p_lognormal"]
         result["pl_R_size_exponential"] = diag_s["R_exponential"]
         result["pl_p_size_exponential"] = diag_s["p_exponential"]
+        result["pl_gof_p_size"] = diag_s["gof_p"]
+        result["pl_gof_valid_boot_size"] = diag_s["gof_valid_boot"]
+        result["pl_gof_bootstrap_exceptions_size"] = diag_s["gof_bootstrap_exceptions"]
+        result["pl_gof_status_size"] = diag_s["gof_status"]
 
         # accept exponent only if tail is large enough
         if np.isfinite(diag_s["alpha"]) and np.isfinite(diag_s["ntail"]) and diag_s["ntail"] >= pl_min_tail_samples:
@@ -950,13 +1192,22 @@ def compute_metrics_from_times(
                     tau_size = float("nan")
 
     if compute_avalanche and durations.size >= pl_min_samples:
-        diag_t = fit_powerlaw_diagnostics(durations)
+        diag_t = fit_powerlaw_diagnostics(
+            durations,
+            compute_gof=compute_pl_gof,
+            gof_bootstrap_samples=pl_gof_bootstrap_samples,
+            max_fit_samples=(pl_max_fit_samples if pl_max_fit_samples > 0 else None),
+        )
         result["pl_xmin_duration"] = diag_t["xmin"]
         result["pl_ntail_duration"] = diag_t["ntail"]
         result["pl_R_duration_lognormal"] = diag_t["R_lognormal"]
         result["pl_p_duration_lognormal"] = diag_t["p_lognormal"]
         result["pl_R_duration_exponential"] = diag_t["R_exponential"]
         result["pl_p_duration_exponential"] = diag_t["p_exponential"]
+        result["pl_gof_p_duration"] = diag_t["gof_p"]
+        result["pl_gof_valid_boot_duration"] = diag_t["gof_valid_boot"]
+        result["pl_gof_bootstrap_exceptions_duration"] = diag_t["gof_bootstrap_exceptions"]
+        result["pl_gof_status_duration"] = diag_t["gof_status"]
 
         if np.isfinite(diag_t["alpha"]) and np.isfinite(diag_t["ntail"]) and diag_t["ntail"] >= pl_min_tail_samples:
             tau_duration = float(diag_t["alpha"])
@@ -972,6 +1223,7 @@ def compute_metrics_from_times(
     result["pl_fit_ok_size"] = 1.0 if np.isfinite(tau_size) else 0.0
     result["pl_fit_ok_duration"] = 1.0 if np.isfinite(tau_duration) else 0.0
     result["pl_fit_ok_both"] = 1.0 if np.isfinite(tau_size) and np.isfinite(tau_duration) else 0.0
+    populate_powerlaw_preference_metrics(result)
     if compute_avalanche:
         gamma_fitted = fit_gamma_exponent(sizes, durations)
         result["gamma_fitted"] = gamma_fitted
@@ -1310,6 +1562,15 @@ def write_analysis_outputs(
                 avalanche_out / "heatmap_pl_fit_ok_both.png",
                 color_limits=(0.0, 1.0),
             )
+            pl_better_both_grid = window_result["grids"]["pl_better_both"]
+            plot_heatmap(
+                pl_better_both_grid,
+                alphas,
+                betas,
+                f"Power-law not worse than lognormal/exponential (size & duration) [{window_result['name']}]",
+                avalanche_out / "heatmap_pl_better_both.png",
+                color_limits=(0.0, 1.0),
+            )
 
 
 def analyze_window(
@@ -1359,6 +1620,9 @@ def analyze_window(
     pl_min_samples = int(args.pl_min_samples)
     pl_min_tail_samples = int(args.pl_min_tail_samples)
     pl_require_not_worse = bool(args.pl_require_not_worse)
+    compute_pl_gof = bool(args.compute_pl_gof)
+    pl_gof_bootstrap_samples = int(args.pl_gof_bootstrap_samples)
+    pl_max_fit_samples = int(args.pl_max_fit_samples)
     compute_branching = bool(args.compute_branching)
     compute_avalanche = bool(args.compute_avalanche)
 
@@ -1390,12 +1654,20 @@ def analyze_window(
             "pl_p_size_lognormal": metrics["pl_p_size_lognormal"],
             "pl_R_size_exponential": metrics["pl_R_size_exponential"],
             "pl_p_size_exponential": metrics["pl_p_size_exponential"],
+            "pl_gof_p_size": metrics["pl_gof_p_size"],
+            "pl_gof_valid_boot_size": metrics["pl_gof_valid_boot_size"],
+            "pl_gof_bootstrap_exceptions_size": metrics["pl_gof_bootstrap_exceptions_size"],
+            "pl_gof_status_size": metrics["pl_gof_status_size"],
             "pl_xmin_duration": metrics["pl_xmin_duration"],
             "pl_ntail_duration": metrics["pl_ntail_duration"],
             "pl_R_duration_lognormal": metrics["pl_R_duration_lognormal"],
             "pl_p_duration_lognormal": metrics["pl_p_duration_lognormal"],
             "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
             "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
+            "pl_gof_p_duration": metrics["pl_gof_p_duration"],
+            "pl_gof_valid_boot_duration": metrics["pl_gof_valid_boot_duration"],
+            "pl_gof_bootstrap_exceptions_duration": metrics["pl_gof_bootstrap_exceptions_duration"],
+            "pl_gof_status_duration": metrics["pl_gof_status_duration"],
             "run_name": run_name,
             "window": window_name,
         }
@@ -1430,6 +1702,9 @@ def analyze_window(
                 pl_min_samples,
                 pl_min_tail_samples,
                 pl_require_not_worse,
+                compute_pl_gof,
+                pl_gof_bootstrap_samples,
+                pl_max_fit_samples,
                 compute_branching,
                 compute_avalanche,
             )
@@ -1456,6 +1731,9 @@ def analyze_window(
                     pl_min_samples,
                     pl_min_tail_samples,
                     pl_require_not_worse,
+                    compute_pl_gof,
+                    pl_gof_bootstrap_samples,
+                    pl_max_fit_samples,
                     compute_branching,
                     compute_avalanche,
                 )
@@ -1537,6 +1815,13 @@ def analyze_sweep_dir(
         print("Branching analysis disabled (--no-compute-branching)")
     if not args.compute_avalanche:
         print("Avalanche/DCC analysis disabled (--no-compute-avalanche)")
+    if args.compute_avalanche:
+        if not args.compute_pl_gof:
+            print("Power-law GOF disabled (--no-compute-pl-gof)")
+        else:
+            print(f"Power-law GOF bootstrap samples = {int(args.pl_gof_bootstrap_samples)}")
+        if int(args.pl_max_fit_samples) > 0:
+            print(f"Power-law fit sample cap enabled: max {int(args.pl_max_fit_samples)} avalanches per fit")
     if args.compute_avalanche and not POWERLAW_AVAILABLE:
         print("Warning: powerlaw package not installed; DCC exponents will be NaN")
 
@@ -1591,6 +1876,9 @@ def analyze_sweep_dir(
     pl_min_samples = int(args.pl_min_samples)
     pl_min_tail_samples = int(args.pl_min_tail_samples)
     pl_require_not_worse = bool(args.pl_require_not_worse)
+    compute_pl_gof = bool(args.compute_pl_gof)
+    pl_gof_bootstrap_samples = int(args.pl_gof_bootstrap_samples)
+    pl_max_fit_samples = int(args.pl_max_fit_samples)
     compute_branching = bool(args.compute_branching)
     compute_avalanche = bool(args.compute_avalanche)
     log_timing = bool(args.log_timing)
@@ -1604,6 +1892,8 @@ def analyze_sweep_dir(
         "compute_windows_s": 0.0,
         "total_row_s": 0.0,
     }
+    total_rows = len(summary_rows)
+    completed_rows = 0
     max_row_total_s = 0.0
     prefetched_results: dict[
         int,
@@ -1618,6 +1908,7 @@ def analyze_sweep_dir(
         per_population: dict[str, dict[str, dict[str, float]]],
         timing: dict[str, float],
     ) -> None:
+        nonlocal completed_rows
         bi = beta_index[beta]
         ai = alpha_index[alpha]
         nonlocal max_row_total_s
@@ -1650,15 +1941,26 @@ def analyze_sweep_dir(
                     "pl_p_size_lognormal": metrics["pl_p_size_lognormal"],
                     "pl_R_size_exponential": metrics["pl_R_size_exponential"],
                     "pl_p_size_exponential": metrics["pl_p_size_exponential"],
+                    "pl_gof_p_size": metrics["pl_gof_p_size"],
+                    "pl_gof_valid_boot_size": metrics["pl_gof_valid_boot_size"],
+                    "pl_gof_bootstrap_exceptions_size": metrics["pl_gof_bootstrap_exceptions_size"],
+                    "pl_gof_status_size": metrics["pl_gof_status_size"],
                     "pl_xmin_duration": metrics["pl_xmin_duration"],
                     "pl_ntail_duration": metrics["pl_ntail_duration"],
                     "pl_R_duration_lognormal": metrics["pl_R_duration_lognormal"],
                     "pl_p_duration_lognormal": metrics["pl_p_duration_lognormal"],
                     "pl_R_duration_exponential": metrics["pl_R_duration_exponential"],
                     "pl_p_duration_exponential": metrics["pl_p_duration_exponential"],
+                    "pl_gof_p_duration": metrics["pl_gof_p_duration"],
+                    "pl_gof_valid_boot_duration": metrics["pl_gof_valid_boot_duration"],
+                    "pl_gof_bootstrap_exceptions_duration": metrics["pl_gof_bootstrap_exceptions_duration"],
+                    "pl_gof_status_duration": metrics["pl_gof_status_duration"],
                     "pl_fit_ok_size": metrics["pl_fit_ok_size"],
                     "pl_fit_ok_duration": metrics["pl_fit_ok_duration"],
                     "pl_fit_ok_both": metrics["pl_fit_ok_both"],
+                    "pl_better_size": metrics["pl_better_size"],
+                    "pl_better_duration": metrics["pl_better_duration"],
+                    "pl_better_both": metrics["pl_better_both"],
                     "tau_size_median": metrics["tau_size_median"],
                     "tau_size_iqr": metrics["tau_size_iqr"],
                     "tau_duration_median": metrics["tau_duration_median"],
@@ -1669,6 +1971,12 @@ def analyze_sweep_dir(
                 pop_windows[window_name]["analysis_rows_data"][row_idx] = analysis_row
                 for key in GRID_METRIC_KEYS:
                     pop_windows[window_name]["grids"][key][bi, ai] = metrics[key]
+        completed_rows += 1
+        run_display = run_name if run_name is not None else "<unknown>"
+        print(
+            f"[row {completed_rows}/{total_rows}] done idx={row_idx + 1} run={run_display} "
+            f"alpha={alpha:.3f} beta={beta:.3f} worker_s={float(timing.get('total_row_s', 0.0)):.2f}"
+        )
 
     if compute_avalanche and pl_early_stop_check_runs > 0:
         pilot_count = min(pl_early_stop_check_runs, len(summary_rows))
@@ -1695,6 +2003,9 @@ def analyze_sweep_dir(
                 pl_min_samples,
                 pl_min_tail_samples,
                 pl_require_not_worse,
+                compute_pl_gof,
+                pl_gof_bootstrap_samples,
+                pl_max_fit_samples,
                 compute_branching,
                 compute_avalanche,
             )
@@ -1724,7 +2035,13 @@ def analyze_sweep_dir(
 
     if worker_count == 1:
         for row_index, row in enumerate(summary_rows):
+            row_run_name = row.get("run_name") or "<unknown>"
+            print(
+                f"[row {row_index + 1}/{total_rows}] start run={row_run_name} "
+                f"alpha={float(row['alpha']):.3f} beta={float(row['beta']):.3f}"
+            )
             if row_index in prefetched_results:
+                print(f"[row {row_index + 1}/{total_rows}] using prefetched pilot result")
                 row_idx, alpha, beta, run_name, per_population, timing = prefetched_results[row_index]
             else:
                 row_idx, alpha, beta, run_name, per_population, timing = _compute_row_all_metrics(
@@ -1743,6 +2060,9 @@ def analyze_sweep_dir(
                     pl_min_samples,
                     pl_min_tail_samples,
                     pl_require_not_worse,
+                    compute_pl_gof,
+                    pl_gof_bootstrap_samples,
+                    pl_max_fit_samples,
                     compute_branching,
                     compute_avalanche,
                 )
@@ -1753,6 +2073,11 @@ def analyze_sweep_dir(
             for row_index, row in enumerate(summary_rows):
                 if row_index in prefetched_results:
                     continue
+                row_run_name = row.get("run_name") or "<unknown>"
+                print(
+                    f"[row {row_index + 1}/{total_rows}] queued run={row_run_name} "
+                    f"alpha={float(row['alpha']):.3f} beta={float(row['beta']):.3f}"
+                )
                 future = executor.submit(
                     _compute_row_all_metrics,
                     row_index,
@@ -1770,6 +2095,9 @@ def analyze_sweep_dir(
                     pl_min_samples,
                     pl_min_tail_samples,
                     pl_require_not_worse,
+                    compute_pl_gof,
+                    pl_gof_bootstrap_samples,
+                    pl_max_fit_samples,
                     compute_branching,
                     compute_avalanche,
                 )
@@ -1868,6 +2196,9 @@ def _compute_row_all_metrics(
     pl_min_samples: int,
     pl_min_tail_samples: int,
     pl_require_not_worse: bool,
+    compute_pl_gof: bool,
+    pl_gof_bootstrap_samples: int,
+    pl_max_fit_samples: int,
     compute_branching: bool,
     compute_avalanche: bool,
 ) -> tuple[int, float, float, str | None, dict[str, dict[str, dict[str, float]]], dict[str, float]]:
@@ -1923,6 +2254,9 @@ def _compute_row_all_metrics(
                 pl_min_samples=pl_min_samples,
                 pl_min_tail_samples=pl_min_tail_samples,
                 pl_require_not_worse=pl_require_not_worse,
+                compute_pl_gof=compute_pl_gof,
+                pl_gof_bootstrap_samples=pl_gof_bootstrap_samples,
+                pl_max_fit_samples=pl_max_fit_samples,
                 compute_branching=compute_branching,
                 compute_avalanche=compute_avalanche,
             )
@@ -1958,6 +2292,9 @@ def _compute_row_metrics(
     pl_min_samples: int,
     pl_min_tail_samples: int,
     pl_require_not_worse: bool,
+    compute_pl_gof: bool,
+    pl_gof_bootstrap_samples: int,
+    pl_max_fit_samples: int,
     compute_branching: bool,
     compute_avalanche: bool,
 ) -> tuple[int, float, float, str | None, dict[str, float]]:
@@ -1977,6 +2314,9 @@ def _compute_row_metrics(
         pl_min_samples=pl_min_samples,
         pl_min_tail_samples=pl_min_tail_samples,
         pl_require_not_worse=pl_require_not_worse,
+        compute_pl_gof=compute_pl_gof,
+        pl_gof_bootstrap_samples=pl_gof_bootstrap_samples,
+        pl_max_fit_samples=pl_max_fit_samples,
         compute_branching=compute_branching,
         compute_avalanche=compute_avalanche,
     )
@@ -2117,6 +2457,44 @@ def load_cached_run_analysis_result(run_dir: Path, run_output_root: Path) -> dic
                         grids[key] = np.asarray(payload[key], float)
                     else:
                         grids[key] = np.full(shape, np.nan)
+                # Backfill derived preference flags for cached runs generated
+                # before these columns were introduced.
+                if np.all(np.isnan(grids["pl_better_size"])):
+                    size_ok = np.isfinite(grids["tau_size"])
+                    size_cmp_ok = (
+                        np.isfinite(grids["pl_R_size_lognormal"])
+                        & np.isfinite(grids["pl_p_size_lognormal"])
+                        & np.isfinite(grids["pl_R_size_exponential"])
+                        & np.isfinite(grids["pl_p_size_exponential"])
+                    )
+                    size_reject = (
+                        ((grids["pl_R_size_lognormal"] < 0.0) & (grids["pl_p_size_lognormal"] < 0.1))
+                        | ((grids["pl_R_size_exponential"] < 0.0) & (grids["pl_p_size_exponential"] < 0.1))
+                    )
+                    grids["pl_better_size"] = np.where(size_ok & size_cmp_ok & (~size_reject), 1.0, 0.0)
+
+                if np.all(np.isnan(grids["pl_better_duration"])):
+                    duration_ok = np.isfinite(grids["tau_duration"])
+                    duration_cmp_ok = (
+                        np.isfinite(grids["pl_R_duration_lognormal"])
+                        & np.isfinite(grids["pl_p_duration_lognormal"])
+                        & np.isfinite(grids["pl_R_duration_exponential"])
+                        & np.isfinite(grids["pl_p_duration_exponential"])
+                    )
+                    duration_reject = (
+                        ((grids["pl_R_duration_lognormal"] < 0.0) & (grids["pl_p_duration_lognormal"] < 0.1))
+                        | ((grids["pl_R_duration_exponential"] < 0.0) & (grids["pl_p_duration_exponential"] < 0.1))
+                    )
+                    grids["pl_better_duration"] = np.where(
+                        duration_ok & duration_cmp_ok & (~duration_reject), 1.0, 0.0
+                    )
+
+                if np.all(np.isnan(grids["pl_better_both"])):
+                    grids["pl_better_both"] = np.where(
+                        (grids["pl_better_size"] > 0.5) & (grids["pl_better_duration"] > 0.5),
+                        1.0,
+                        0.0,
+                    )
                 if "tau_mr_ms" in grids:
                     tau_grid = np.asarray(grids["tau_mr_ms"], float)
                     invalid_mask = (tau_grid < TAU_MR_MIN_MS) | (tau_grid > TAU_MR_MAX_MS)
