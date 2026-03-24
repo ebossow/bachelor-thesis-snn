@@ -3,6 +3,7 @@ import argparse
 import copy
 import matplotlib
 import matplotlib.image as mpimg
+from matplotlib.patches import Rectangle
 import numpy as np
 
 from src.analysis.summary_metrics import compute_summary_metrics
@@ -25,6 +26,7 @@ from src.analysis.plotting import (
     plot_kuramoto_pdf_multi_ax,
     plot_weight_change_pdf_multi_ax,
 )
+from src.analysis.stimulus_groups import extract_stimulus_populations
 from src.analysis.util import load_run, find_latest_run_dir
 
 plt = None
@@ -506,6 +508,32 @@ def _collect_combined_spike_times(window_data) -> np.ndarray:
     return np.sort(np.concatenate(times))
 
 
+def _collect_spike_times_for_neurons(window_data, neuron_ids) -> np.ndarray:
+    if not neuron_ids:
+        return np.array([], dtype=float)
+
+    allowed_ids = np.asarray(neuron_ids, dtype=int)
+    if allowed_ids.size == 0:
+        return np.array([], dtype=float)
+
+    times: list[np.ndarray] = []
+    for key in ("spikes_E", "spikes_IH", "spikes_IA"):
+        pop = window_data.get(key)
+        if pop is None:
+            continue
+        pop_times = np.asarray(pop.get("times", []), dtype=float)
+        pop_senders = np.asarray(pop.get("senders", []), dtype=int)
+        if pop_times.size == 0 or pop_senders.size == 0:
+            continue
+        mask = np.isin(pop_senders, allowed_ids)
+        if np.any(mask):
+            times.append(pop_times[mask])
+
+    if not times:
+        return np.array([], dtype=float)
+    return np.sort(np.concatenate(times))
+
+
 def _compute_m_timecourse(
     times_ms: np.ndarray,
     *,
@@ -553,13 +581,25 @@ def _compute_m_timecourse(
     return np.asarray(centers_ms, dtype=float) * 0.001, np.asarray(m_vals, dtype=float)
 
 
-def _plot_m_timecourse_ax(ax, window_data, window_start_ms: float, window_end_ms: float):
+def _plot_m_timecourse_ax(
+    ax,
+    window_data,
+    window_start_ms: float,
+    window_end_ms: float,
+    *,
+    neuron_ids=None,
+    title: str = "Branching ratio m(t)",
+    color: str = "#1f77b4",
+):
     if not MRESTIMATOR_AVAILABLE:
         ax.text(0.5, 0.5, "mrestimator not available", ha="center", va="center")
         ax.set_axis_off()
         return
 
-    times_ms = _collect_combined_spike_times(window_data)
+    if neuron_ids is None:
+        times_ms = _collect_combined_spike_times(window_data)
+    else:
+        times_ms = _collect_spike_times_for_neurons(window_data, neuron_ids)
     if times_ms.size == 0:
         ax.text(0.5, 0.5, "no spikes in window", ha="center", va="center")
         ax.set_axis_off()
@@ -578,10 +618,133 @@ def _plot_m_timecourse_ax(ax, window_data, window_start_ms: float, window_end_ms
         ax.set_axis_off()
         return
 
-    ax.plot(t_s, m_t, color="#1f77b4", linewidth=1.7)
-    ax.set_ylabel("m")
-    ax.set_title("Branching ratio m(t)")
+    ax.plot(t_s, m_t, color=color, linewidth=1.7)
+    ax.set_ylabel("m", fontsize=14)
+    ax.set_title(title)
     ax.grid(alpha=0.3)
+
+
+def create_branching_over_time_figure(
+    cfg,
+    data,
+    weights_over_time,
+    stim_metadata,
+    window_start_ms: float,
+    window_end_ms: float,
+):
+    window_data = _slice_data_window(data, window_start_ms, window_end_ms)
+
+    cfg_window = copy.deepcopy(cfg)
+    cfg_window.setdefault("analysis", {})["window_ms"] = {
+        "start": float(window_start_ms),
+        "end": float(window_end_ms),
+    }
+    cfg_window["experiment"]["simtime_ms"] = float(window_end_ms)
+    cfg_window.setdefault("stimulation", {}).setdefault("pattern", {})["t_off_ms"] = float(window_start_ms)
+
+    stimulus_groups = extract_stimulus_populations(stim_metadata)
+    cluster_1_ids = []
+    if stimulus_groups:
+        cluster_1_ids = stimulus_groups[0].get("neuron_ids") or []
+
+    fig = plt.figure(figsize=(9.85, 5.8))
+    gs = fig.add_gridspec(2, 1, hspace=0.42)
+    ax_A = fig.add_subplot(gs[0, 0])
+    ax_B = fig.add_subplot(gs[1, 0])
+
+    window_start_s = window_start_ms * 0.001
+    window_end_s = window_end_ms * 0.001
+    shared_ticks = np.linspace(window_start_s, window_end_s, 7)
+
+    plot_spike_raster_ax(ax_A, window_data, cfg_window)
+    ax_A.set_title("Post-learning state", pad=24)
+    ax_A.set_yticks([0, 50, 100])
+
+    _plot_m_timecourse_ax(
+        ax_B,
+        window_data,
+        window_start_ms,
+        window_end_ms,
+        neuron_ids=cluster_1_ids,
+        title="Branching ratio m(t) - Cluster 1",
+        color="#ff7f0e",
+    )
+
+    for ax in (ax_A, ax_B):
+        if ax.axison:
+            ax.set_xlim(window_start_s, window_end_s)
+            ax.set_xticks(shared_ticks)
+
+    if ax_A.axison:
+        ax_A.set_xlabel("")
+        ax_A.tick_params(axis="x", labelbottom=False)
+
+    if ax_B.axison:
+        ax_B.set_xlabel("Time (seconds)", fontsize=14)
+
+    # Fixed analysis windows to emphasize in the branching-over-time figure.
+    highlight_windows_s = [
+        (1560.0, 1570.0),
+        (1610.0, 1630.0),
+    ]
+    for ax in (ax_A, ax_B):
+        for start_s, end_s in highlight_windows_s:
+            # Clip each requested window to the currently plotted x-range.
+            clip_start_s = max(window_start_s, start_s)
+            clip_end_s = min(window_end_s, end_s)
+            if clip_end_s > clip_start_s:
+                ax.axvspan(
+                    clip_start_s,
+                    clip_end_s,
+                    color="#f4c27a",
+                    alpha=0.2,
+                    zorder=0,
+                )
+
+    # Cluster-1 neuron bands (IDs are 1-based in NEST sender IDs).
+    # Raster y-axis uses sender_id - 1, so convert to that coordinate system.
+    cluster_1_id_bands = [(1, 40), (81, 90)]
+    for start_s, end_s in highlight_windows_s:
+        clip_start_s = max(window_start_s, start_s)
+        clip_end_s = min(window_end_s, end_s)
+        if clip_end_s <= clip_start_s:
+            continue
+        for id_start, id_end in cluster_1_id_bands:
+            y0 = float(id_start - 1) - 0.5
+            y1 = float(id_end - 1) + 0.5
+            rect = Rectangle(
+                (clip_start_s, y0),
+                clip_end_s - clip_start_s,
+                y1 - y0,
+                fill=False,
+                edgecolor="black",
+                linewidth=1.4,
+                zorder=4,
+            )
+            ax_A.add_patch(rect)
+
+    left_anchor_x = min(
+        ax_A.get_position().x0,
+        ax_B.get_position().x0,
+    ) - 0.04
+
+    for ax, label in ((ax_A, "A"), (ax_B, "B")):
+        bbox = ax.get_position()
+        fig.text(
+            left_anchor_x,
+            bbox.y1 + 0.01,
+            label,
+            fontsize=18,
+            fontweight="bold",
+            va="bottom",
+            ha="left",
+        )
+
+    for ax in (ax_A, ax_B):
+        if ax.axison:
+            _enable_subplot_box(ax)
+
+    return fig
 
 
 def create_bergoin_metrics_figure(
@@ -1177,6 +1340,7 @@ def main():
     figures = []
     full_analysis_fig = None
     full_analysis_with_m_fig = None
+    branching_over_time_fig = None
     if auto_full_analysis:
         post_start_ms, post_end_ms = resolve_post_learning_interval_ms(cfg_full)
         if args.full_analysis_start_s is not None:
@@ -1214,6 +1378,21 @@ def main():
                 window_end_ms=window_end_ms,
                 include_m_timecourse_row=True,
             )
+            extended_window_end_ms = min(post_end_ms, window_start_ms + 120000.0)
+            if extended_window_end_ms > window_start_ms:
+                print(
+                    "Auto branching-over-time window "
+                    f"[{window_start_ms:.1f}, {extended_window_end_ms:.1f}] ms "
+                    f"within post phase [{post_start_ms:.1f}, {post_end_ms:.1f}] ms"
+                )
+                branching_over_time_fig = create_branching_over_time_figure(
+                    cfg_full,
+                    data_full,
+                    weights_over_time_full,
+                    stim_metadata_full,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=extended_window_end_ms,
+                )
 
     if args.output_pdf:
         figures = create_summary_component_figures(
@@ -1285,6 +1464,9 @@ def main():
     if full_analysis_with_m_fig is not None:
         output_dir = Path("results") / "plots" / run_dir.name
         save_single_figure_pdf(full_analysis_with_m_fig, output_dir, "full_analysis_with_m")
+    if branching_over_time_fig is not None:
+        output_dir = Path("results") / "plots" / run_dir.name
+        save_single_figure_pdf(branching_over_time_fig, output_dir, "branching_over_time")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,12 @@ from src.analysis.util import load_run, find_latest_run_dir, combine_spikes
 from src.analysis.metrics import avalanche_sizes_from_times
 
 
+AXIS_LABEL_FONTSIZE = 20
+TITLE_FONTSIZE = 17
+TICK_LABEL_FONTSIZE = 12
+LEGEND_FONTSIZE = 12
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -164,10 +170,11 @@ def main():
             fit.plot_ccdf(ax=ax, label="data")
             fit.power_law.plot_ccdf(ax=ax, linestyle="--", label="power-law fit")
 
-            ax.set_xlabel("Avalanche size (spikes)")
-            ax.set_ylabel("CCDF")
-            ax.set_title(f"Avalanche sizes, dt = {dt_ms:.1f} ms")
-            ax.legend()
+            ax.set_xlabel("Avalanche size (spikes)", fontsize=AXIS_LABEL_FONTSIZE)
+            ax.set_ylabel("CCDF", fontsize=AXIS_LABEL_FONTSIZE)
+            ax.set_title(f"Avalanche sizes, dt = {dt_ms:.1f} ms", fontsize=TITLE_FONTSIZE)
+            ax.legend(fontsize=LEGEND_FONTSIZE)
+            ax.tick_params(axis="both", which="both", labelsize=TICK_LABEL_FONTSIZE)
             ax.set_xscale("log")
             ax.set_yscale("log")
 

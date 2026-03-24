@@ -77,9 +77,9 @@ def plot_spike_raster_ax(ax: plt.Axes,
     ax.set_xlim(sim_start_s, sim_end_s)
     ax.set_xticks(np.linspace(sim_start_s, sim_end_s, 5))
     ax.set_ylim(-1, N_total + 1)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Neuron index")
-    ax.legend(loc="upper left")
+    ax.set_xlabel("Time (s)", fontsize=14)
+    ax.set_ylabel("Neuron index", fontsize=14)
+    ax.legend(loc="upper right")
     ax.set_title("Spike raster")
 
 

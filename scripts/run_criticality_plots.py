@@ -589,6 +589,14 @@ def _render_branching_whole_vs_cluster_comparison(
     pre_label = _window_display_name(pre_window)
     post_label = _window_display_name(post_window)
 
+    title_fontsize = 14
+    axis_label_fontsize = 18
+    tick_label_fontsize = 11
+    suptitle_fontsize = 16
+    panel_label_fontsize = 16
+    cbar_label_fontsize = 13
+    cbar_tick_fontsize = 11
+
     sigma_combined = np.concatenate(
         [
             whole_pre_sigma.ravel(),
@@ -697,30 +705,34 @@ def _render_branching_whole_vs_cluster_comparison(
         vmax=tau_vmax,
     )
 
-    axs[0, 0].set_title(rf"$m$ - Whole Population - {pre_label}")
-    axs[0, 1].set_title(rf"$m$ - Whole Population - {post_label}")
-    axs[0, 2].set_title(rf"$m$ - Cluster 1 - {pre_label}")
-    axs[0, 3].set_title(rf"$m$ - Cluster 1 - {post_label}")
-    axs[1, 0].set_title(rf"$\tau_{{MR}}$ - Whole Population - {pre_label}")
-    axs[1, 1].set_title(rf"$\tau_{{MR}}$ - Whole Population - {post_label}")
-    axs[1, 2].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {pre_label}")
-    axs[1, 3].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {post_label}")
+    axs[0, 0].set_title(rf"$m$ - Whole Population - {pre_label}", fontsize=title_fontsize)
+    axs[0, 1].set_title(rf"$m$ - Whole Population - {post_label}", fontsize=title_fontsize)
+    axs[0, 2].set_title(rf"$m$ - Cluster 1 - {pre_label}", fontsize=title_fontsize)
+    axs[0, 3].set_title(rf"$m$ - Cluster 1 - {post_label}", fontsize=title_fontsize)
+    axs[1, 0].set_title(rf"$\tau_{{MR}}$ - Whole Population - {pre_label}", fontsize=title_fontsize)
+    axs[1, 1].set_title(rf"$\tau_{{MR}}$ - Whole Population - {post_label}", fontsize=title_fontsize)
+    axs[1, 2].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {pre_label}", fontsize=title_fontsize)
+    axs[1, 3].set_title(rf"$\tau_{{MR}}$ - Cluster 1 - {post_label}", fontsize=title_fontsize)
 
     tick_values = [0.0, 0.5, 1.0, 1.5, 2.0]
     for ax in axs.ravel():
         ax.set_xticks(tick_values)
         ax.set_yticks(tick_values)
-        ax.set_xlabel(r"$s_{exc}$")
+        ax.set_xlabel(r"$s_{exc}$", fontsize=axis_label_fontsize)
+        ax.tick_params(axis="both", labelsize=tick_label_fontsize)
 
-    axs[0, 0].set_ylabel(r"$s_{inh}$")
-    axs[1, 0].set_ylabel(r"$s_{inh}$")
+    axs[0, 0].set_ylabel(r"$s_{inh}$", fontsize=axis_label_fontsize)
+    axs[1, 0].set_ylabel(r"$s_{inh}$", fontsize=axis_label_fontsize)
     for col in (1, 2, 3):
         axs[0, col].set_ylabel("")
         axs[1, col].set_ylabel("")
         axs[0, col].tick_params(axis="y", labelleft=False)
         axs[1, col].tick_params(axis="y", labelleft=False)
 
-    fig.suptitle(rf"Branching Ratio $m$ and Autocorrelation Time $\tau_{{MR}}$ Comparison - Whole Population vs Cluster 1")
+    fig.suptitle(
+        rf"Branching Ratio $m$ and Autocorrelation Time $\tau_{{MR}}$ Comparison - Whole Population vs Cluster 1",
+        fontsize=suptitle_fontsize,
+    )
 
     panel_labels = [
         ("A", axs[0, 0]),
@@ -736,7 +748,7 @@ def _render_branching_whole_vs_cluster_comparison(
             label,
             va="bottom",
             ha="left",
-            fontsize=14,
+            fontsize=panel_label_fontsize,
             fontweight="bold",
         )
 
@@ -764,12 +776,13 @@ def _render_branching_whole_vs_cluster_comparison(
     tau_right = axs[1, 3].get_position()
     cbar_width = 0.018
     cbar_gap = 0.014
-    main_x = sigma_right.x1 + 0.020
+    main_x = sigma_right.x1 + 0.030
     zoom_x = main_x + cbar_width + cbar_gap
 
     sigma_cax = fig.add_axes([main_x, sigma_right.y0, cbar_width, sigma_right.height])
     sigma_cbar = fig.colorbar(im_sigma, cax=sigma_cax)
-    sigma_cbar.set_label(r"$m$")
+    sigma_cbar.set_label(r"$m$", fontsize=cbar_label_fontsize)
+    sigma_cbar.ax.tick_params(labelsize=cbar_tick_fontsize)
     sigma_cbar.ax.yaxis.set_ticks_position("left")
     sigma_cbar.ax.yaxis.set_label_position("left")
 
@@ -832,7 +845,8 @@ def _render_branching_whole_vs_cluster_comparison(
 
     tau_cax = fig.add_axes([main_x, tau_right.y0, cbar_width, tau_right.height])
     tau_cbar = fig.colorbar(im_tau, cax=tau_cax)
-    tau_cbar.set_label(r"$\tau_{MR}$ (ms)")
+    tau_cbar.set_label(r"$\tau_{MR}$ (ms)", fontsize=cbar_label_fontsize)
+    tau_cbar.ax.tick_params(labelsize=cbar_tick_fontsize)
     tau_cbar.ax.yaxis.set_ticks_position("left")
     tau_cbar.ax.yaxis.set_label_position("left")
 

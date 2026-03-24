@@ -42,6 +42,11 @@ DEFAULT_CRITICALITY_ANALYSIS_DIR = Path(
 DEFAULT_CRITICALITY_RUN_ANALYSIS_DIR = Path(
     "results/criticality_analysis/multiple_run_100_times_20260120_140859_analysis/run_030_analysis"
 )
+FONT_SCALE = 1.15
+
+
+def _scaled(size: float) -> float:
+    return size * FONT_SCALE
 
 
 def setup_matplotlib_style() -> None:
@@ -259,14 +264,15 @@ def _plot_heatmap_with_markers(
         ax.plot(alpha, beta, marker=marker_styles[i], markersize=10,
             linestyle='None', markerfacecolor='none', markeredgecolor='black', markeredgewidth=1.2)
 
-    ax.set_title(title, fontsize=11)
-    ax.set_xlabel(r"$s_{exc}$", fontsize=10)
+    ax.set_title(title, fontsize=_scaled(11))
+    ax.set_xlabel(r"$s_{exc}$", fontsize=_scaled(10))
     if show_ylabel:
-        ax.set_ylabel(r"$s_{inh}$", fontsize=10)
+        ax.set_ylabel(r"$s_{inh}$", fontsize=_scaled(10))
 
     tick_values = [0.0, 0.5, 1.0, 1.5, 2.0]
     ax.set_xticks(tick_values)
     ax.set_yticks(tick_values)
+    ax.tick_params(axis="both", labelsize=_scaled(9))
 
     return im
 
@@ -310,21 +316,42 @@ def _plot_single_row(
 
     ax.set_xlim(0.0, pre_s + post_s)
     ax.set_ylim(-1, n_total + 1)
-    ax.set_ylabel("Neuron index")
+    ax.set_ylabel("Neuron index", fontsize=_scaled(11))
     
     # First row: s_exc and s_inh centered over entire plot
     total_time = pre_s + post_s
-    ax.text(total_time / 2, 1.12, rf"$s_{{exc}}={alpha:.2f},\ s_{{inh}}={beta:.2f}$",
-            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=13)
-    
+    ax.text(
+        total_time / 2,
+        1.12,
+        rf"$s_{{exc}}={alpha:.2f},\ s_{{inh}}={beta:.2f}$",
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=_scaled(13),
+    )
+
     # Second row: m values split by pre/post learning
     # Pre-learning values centered over pre area (0 to pre_s)
-    ax.text(pre_s / 2, 1.05, rf"$m_{{network}}={m_network_pre:.3f},\ m_{{cluster1}}={m_cluster_1_pre:.3f}$",
-            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=11)
-    
+    ax.text(
+        pre_s / 2,
+        1.05,
+        rf"$m_{{network}}={m_network_pre:.3f},\ m_{{cluster1}}={m_cluster_1_pre:.3f}$",
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=_scaled(11),
+    )
+
     # Post-learning values centered over post area (pre_s to pre_s + post_s)
-    ax.text(pre_s + post_s / 2, 1.05, rf"$m_{{network}}={m_network_post:.3f},\ m_{{cluster1}}={m_cluster_1_post:.3f}$",
-            transform=ax.get_xaxis_transform(), ha='center', va='bottom', fontsize=11)
+    ax.text(
+        pre_s + post_s / 2,
+        1.05,
+        rf"$m_{{network}}={m_network_post:.3f},\ m_{{cluster1}}={m_cluster_1_post:.3f}$",
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=_scaled(11),
+    )
 
     pre_start_s = (t_on_ms - pre_s * 1000.0) / 1000.0
     post_start_s = t_off_ms / 1000.0
@@ -341,6 +368,7 @@ def _plot_single_row(
 
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels)
+    ax.tick_params(axis="both", labelsize=_scaled(10))
 
 
 def main() -> None:
@@ -482,10 +510,10 @@ def main() -> None:
 
     heatmap_axes = [ax_heatmap_net_pre, ax_heatmap_net_post, ax_heatmap_cluster_pre, ax_heatmap_cluster_post]
     heatmap_titles = [
-        r"$m$ - Whole Population - Pre Learning",
-        r"$m$ - Whole Population - Post Learning",
-        r"$m$ - Cluster 1 - Pre Learning",
-        r"$m$ - Cluster 1 - Post Learning",
+        f"$m$ - Whole Population \n Pre Learning",
+        f"$m$ - Whole Population \n Post Learning",
+        f"$m$ - Cluster 1 \n Pre Learning",
+        f"$m$ - Cluster 1 \n Post Learning",
     ]
     sigma_matrices = [
         network_grid_pre_avg["sigma_mr"],
@@ -520,12 +548,21 @@ def main() -> None:
         Line2D([0], [0], marker='s', linestyle='None', color='black', markerfacecolor='none', markeredgewidth=1.5, markersize=9),
         Line2D([0], [0], marker='o', linestyle='None', color='black', markerfacecolor='none', markeredgewidth=1.5, markersize=9),
     ]
-    legend_ax.legend(custom_handles, ['A', 'B', 'C'], loc="upper left", title="Simulation", fontsize=9, framealpha=0.9)
+    legend_ax.legend(
+        custom_handles,
+        ['A', 'B', 'C'],
+        loc="upper left",
+        title="Simulation",
+        fontsize=_scaled(9),
+        title_fontsize=_scaled(9),
+        framealpha=0.9,
+    )
 
     sigma_cbar = fig.colorbar(im, cax=sigma_cax)
-    sigma_cbar.set_label(r"$m$", fontsize=10)
+    sigma_cbar.set_label(r"$m$", fontsize=_scaled(10))
     sigma_cbar.ax.yaxis.set_ticks_position("left")
     sigma_cbar.ax.yaxis.set_label_position("left")
+    sigma_cbar.ax.tick_params(labelsize=_scaled(9))
 
     zoom_color_limits = (0.90, 1.0)
     zmin, zmax = zoom_color_limits
@@ -549,6 +586,7 @@ def main() -> None:
         sigma_zoom_cbar = fig.colorbar(sigma_zoom_sm, cax=sigma_zoom_ax)
         sigma_zoom_cbar.ax.yaxis.set_ticks_position("right")
         sigma_zoom_cbar.ax.yaxis.set_label_position("right")
+        sigma_zoom_cbar.ax.tick_params(labelsize=_scaled(9))
 
         y_main_low = full_vmin + frac_min * (full_vmax - full_vmin)
         y_main_high = full_vmin + frac_max * (full_vmax - full_vmin)
@@ -628,20 +666,20 @@ def main() -> None:
             m_cluster_1_post=rd["m_cluster_1_post"],
         )
 
-    raster_axes[-1].set_xlabel("Time (s)")
+    raster_axes[-1].set_xlabel("Time (s)", fontsize=_scaled(11))
 
     for i, ax in enumerate(raster_axes):
         label = chr(65 + i)
-        ax.text(-0.04, 1.0, label, transform=ax.transAxes, fontsize=16, fontweight="bold", va="top", ha="right")
+        ax.text(-0.04, 1.0, label, transform=ax.transAxes, fontsize=_scaled(16), fontweight="bold", va="top", ha="right")
 
     spike_handles, spike_labels = raster_axes[0].get_legend_handles_labels()
     if spike_handles:
-        fig.legend(spike_handles, spike_labels, loc="upper right", fontsize=10)
+        fig.legend(spike_handles, spike_labels, loc="upper right", fontsize=_scaled(10))
 
     fig.suptitle(
         "Model Functionality Comparison for Different E/I Ratios\n"
         "(Rasters: 20s pre + 40s post, 35s stimulus interval removed)",
-        fontsize=14,
+        fontsize=_scaled(14),
         y=0.99,
     )
 

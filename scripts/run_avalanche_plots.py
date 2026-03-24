@@ -36,6 +36,15 @@ DEFAULT_POWERLAW_SOURCE_ANALYSIS_DIR = Path(
     "multiple_run_100_times_20260120_140859_analysis_mean"
 )
 
+AXIS_LABEL_FONTSIZE = 15
+AXIS_TITLE_FONTSIZE = 13
+TICK_LABEL_FONTSIZE = 12
+LEGEND_FONTSIZE = 10
+PANEL_LABEL_FONTSIZE = 20
+SECTION_TITLE_FONTSIZE = 13
+COLORBAR_LABEL_FONTSIZE = 13
+COLORBAR_TICK_FONTSIZE = 11
+
 
 def setup_matplotlib_style() -> None:
     matplotlib.rcParams.update(
@@ -345,9 +354,18 @@ def _plot_distribution(
     y_cluster = y_cluster[mask_cluster]
 
     if x_whole.size == 0 and x_cluster.size == 0:
-        ax.text(0.5, 0.5, "No avalanches", ha="center", va="center", transform=ax.transAxes)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel("P(x)")
+        ax.text(
+            0.5,
+            0.5,
+            "No avalanches",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=AXIS_LABEL_FONTSIZE,
+        )
+        ax.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_ylabel("P(x)", fontsize=AXIS_LABEL_FONTSIZE)
+        ax.tick_params(axis="both", which="both", labelsize=TICK_LABEL_FONTSIZE)
         return
 
     x_all = np.concatenate([x_whole, x_cluster]) if (x_whole.size and x_cluster.size) else (x_whole if x_whole.size else x_cluster)
@@ -393,8 +411,9 @@ def _plot_distribution(
                 label=r"Reference $x^{-1.5}$",
             )
 
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("P(x)")
+    ax.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel("P(x)", fontsize=AXIS_LABEL_FONTSIZE)
+    ax.tick_params(axis="both", which="both", labelsize=TICK_LABEL_FONTSIZE)
     ax.grid(False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -420,10 +439,97 @@ def _plot_gof_heatmap(
         cmap=cmap,
         norm=norm,
     )
-    ax.set_title(title, fontsize=10)
-    ax.set_xlabel(r"$s_{exc}$")
-    ax.set_ylabel(r"$s_{inh}$")
+    ax.set_title(title, fontsize=AXIS_TITLE_FONTSIZE)
+    ax.set_xlabel(r"$s_{exc}$", fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(r"$s_{inh}$", fontsize=AXIS_LABEL_FONTSIZE)
+    ax.tick_params(axis="both", which="both", labelsize=TICK_LABEL_FONTSIZE)
     return im
+
+
+def _overlay_example_markers(
+    ax: plt.Axes,
+    entries: list[dict[str, Any]],
+) -> None:
+    marker_styles = ["^", "s", "o"]
+    marker_labels = ["A", "B", "C"]
+
+    for i, entry in enumerate(entries[:3]):
+        alpha = float(entry["alpha"])
+        beta = float(entry["beta"])
+        marker = marker_styles[i]
+
+        ax.plot(
+            alpha,
+            beta,
+            marker=marker,
+            markersize=10,
+            linestyle="None",
+            markerfacecolor="none",
+            markeredgecolor="white",
+            markeredgewidth=2.5,
+            zorder=5,
+        )
+        ax.plot(
+            alpha,
+            beta,
+            marker=marker,
+            markersize=10,
+            linestyle="None",
+            markerfacecolor="none",
+            markeredgecolor="black",
+            markeredgewidth=1.2,
+            zorder=6,
+        )
+
+
+def _add_example_marker_legend(fig: plt.Figure, d_axes: list[plt.Axes]) -> None:
+    custom_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="^",
+            linestyle="None",
+            color="black",
+            markerfacecolor="none",
+            markeredgewidth=1.5,
+            markersize=9,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            linestyle="None",
+            color="black",
+            markerfacecolor="none",
+            markeredgewidth=1.5,
+            markersize=9,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="None",
+            color="black",
+            markerfacecolor="none",
+            markeredgewidth=1.5,
+            markersize=9,
+        ),
+    ]
+
+    d_positions = [ax.get_position() for ax in d_axes]
+    legend_x = max(0.012, min(pos.x0 for pos in d_positions) - 0.085)
+    legend_y = 0.5 * (min(pos.y0 for pos in d_positions) + max(pos.y1 for pos in d_positions))
+
+    fig.legend(
+        custom_handles,
+        ["A", "B", "C"],
+        loc="center left",
+        bbox_to_anchor=(legend_x, legend_y),
+        title="Simulation",
+        fontsize=LEGEND_FONTSIZE,
+        title_fontsize=LEGEND_FONTSIZE,
+        framealpha=0.9,
+    )
 
 
 def _build_first_row_figure(
@@ -440,7 +546,7 @@ def _build_first_row_figure(
     axes = np.asarray([[fig.add_subplot(top[r, c]) for c in range(3)] for r in range(2)])
 
     bottom = outer[1].subgridspec(1, 2, width_ratios=[1.15, 1.0], wspace=0.18)
-    d_grid = bottom[0, 0].subgridspec(2, 2, wspace=0.28, hspace=0.32)
+    d_grid = bottom[0, 0].subgridspec(2, 2, wspace=0.28, hspace=0.45)
     e_grid = bottom[0, 1].subgridspec(1, 2, wspace=0.28)
     ax_d_00 = fig.add_subplot(d_grid[0, 0])
     ax_d_01 = fig.add_subplot(d_grid[0, 1])
@@ -464,11 +570,12 @@ def _build_first_row_figure(
             ha="left",
             va="top",
             fontweight="bold",
-            fontsize=18,
+            fontsize=PANEL_LABEL_FONTSIZE,
         )
         ax_top.set_title(
             rf"$s_{{exc}}={entry['alpha']:.2f},\ s_{{inh}}={entry['beta']:.2f}$",
             loc="center",
+            fontsize=AXIS_TITLE_FONTSIZE,
         )
 
         _plot_distribution(
@@ -507,9 +614,9 @@ def _build_first_row_figure(
         loc="center left",
         bbox_to_anchor=(legend_x, legend_y),
         frameon=True,
-        fontsize=9,
+        fontsize=LEGEND_FONTSIZE,
         #title="Curves",
-        title_fontsize=9,
+        title_fontsize=LEGEND_FONTSIZE,
     )
 
     alphas = gof_heatmap_data["alphas"]
@@ -561,6 +668,9 @@ def _build_first_row_figure(
         norm=norm,
     )
 
+    for ax in (ax_d_00, ax_d_01, ax_d_10, ax_d_11):
+        _overlay_example_markers(ax=ax, entries=entries)
+
     for ax in (ax_d_01, ax_d_11):
         ax.set_ylabel("")
         ax.tick_params(axis="y", labelleft=False)
@@ -573,7 +683,7 @@ def _build_first_row_figure(
         ha="center",
         va="bottom",
         fontweight="bold",
-        fontsize=12,
+        fontsize=SECTION_TITLE_FONTSIZE,
     )
     ax_d_01.text(
         0.5,
@@ -583,7 +693,7 @@ def _build_first_row_figure(
         ha="center",
         va="bottom",
         fontweight="bold",
-        fontsize=12,
+        fontsize=SECTION_TITLE_FONTSIZE,
     )
 
     ax_d_00.text(
@@ -594,7 +704,7 @@ def _build_first_row_figure(
         ha="left",
         va="top",
         fontweight="bold",
-        fontsize=18,
+        fontsize=PANEL_LABEL_FONTSIZE,
     )
 
     powerlaw_cmap = ListedColormap(["#e5e7eb", "#15803d"])
@@ -634,13 +744,16 @@ def _build_first_row_figure(
             pos = axis.get_position()
             axis.set_position([pos.x0 + shift_x, pos.y0, pos.width, pos.height])
 
+    _add_example_marker_legend(fig=fig, d_axes=d_axes)
+
     d_positions = [ax.get_position() for ax in d_axes]
     cbar_x0 = max(pos.x1 for pos in d_positions) + 0.012
     cbar_y0 = min(pos.y0 for pos in d_positions)
     cbar_height = max(pos.y1 for pos in d_positions) - cbar_y0
     cax = fig.add_axes([cbar_x0, cbar_y0, 0.012, cbar_height])
     cbar = fig.colorbar(im, cax=cax)
-    cbar.set_label("GOF p-value")
+    cbar.set_label("GOF p-value", fontsize=COLORBAR_LABEL_FONTSIZE)
+    cbar.ax.tick_params(labelsize=COLORBAR_TICK_FONTSIZE)
 
     e_positions = [ax_e_0.get_position(), ax_e_1.get_position()]
     e_cbar_x0 = max(pos.x1 for pos in e_positions) + 0.012
@@ -651,6 +764,7 @@ def _build_first_row_figure(
     #e_cbar.set_label("Power-law preferred")
     e_cbar.set_ticks([0.0, 1.0])
     e_cbar.set_ticklabels(["No", "Yes"])
+    e_cbar.ax.tick_params(labelsize=COLORBAR_TICK_FONTSIZE)
 
     target_right = axes[0, 2].get_position().x1
     e_left = min(ax.get_position().x0 for ax in e_axes)
@@ -680,7 +794,7 @@ def _build_first_row_figure(
         ha="center",
         va="bottom",
         fontweight="bold",
-        fontsize=12,
+        fontsize=SECTION_TITLE_FONTSIZE,
     )
     d_pos = ax_d_00.get_position()
     e_pos = ax_e_0.get_position()
@@ -694,7 +808,7 @@ def _build_first_row_figure(
         ha="left",
         va="top",
         fontweight="bold",
-        fontsize=18,
+        fontsize=PANEL_LABEL_FONTSIZE,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
